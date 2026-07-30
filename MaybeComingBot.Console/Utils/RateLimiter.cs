@@ -1,0 +1,108 @@
+﻿using MaybeComingBot.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
+
+namespace MaybeComingBot.Utils;
+
+public class RateLimiter : IDisposable
+{
+    private readonly ConcurrentDictionary<long, UserRateLimit> _userLimits = new();
+    private readonly int _maxRequests;
+    private readonly TimeSpan _window;
+    private readonly long _adminUserId;
+    private readonly ILogger<RateLimiter> _logger;
+    private readonly Timer _cleanupTimer;
+
+    public RateLimiter(
+        IOptions<BotSettings> settings,
+        ILogger<RateLimiter> logger)
+    {
+        _maxRequests = 5;
+        _window = TimeSpan.FromMinutes(1);
+        _adminUserId = settings.Value.AdminUserId;
+        _logger = logger;
+
+        _cleanupTimer = new Timer(CleanupExpiredEntries, null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
+    }
+
+    public async Task<bool> IsAllowedAsync(long userId)
+    {
+        if (userId == _adminUserId)
+            return true;
+
+        var now = DateTime.UtcNow;
+
+        // Очищаем просроченные записи при обращении
+        CleanupSingleUser(userId, now);
+
+        var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit());
+
+        lock (limit)
+        {
+            if (now - limit.WindowStart > _window)
+            {
+                limit.WindowStart = now;
+                limit.Count = 0;
+            }
+
+            if (limit.Count >= _maxRequests)
+            {
+                _logger.LogWarning("Rate limit exceeded for user {UserId} (count: {Count})",
+                    userId, limit.Count);
+                return false;
+            }
+
+            limit.Count++;
+            return true;
+        }
+    }
+
+    private void CleanupSingleUser(long userId, DateTime now)
+    {
+        if (_userLimits.TryGetValue(userId, out var limit))
+        {
+            lock (limit)
+            {
+                if (now - limit.WindowStart > TimeSpan.FromMinutes(5))
+                {
+                    _userLimits.TryRemove(userId, out _);
+                }
+            }
+        }
+    }
+
+    private void CleanupExpiredEntries(object? state)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var expiredKeys = _userLimits
+                .Where(kvp => now - kvp.Value.WindowStart > TimeSpan.FromMinutes(5))
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var key in expiredKeys)
+            {
+                _userLimits.TryRemove(key, out _);
+            }
+
+            if (expiredKeys.Count > 0)
+            {
+                _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error cleaning up rate limit entries");
+        }
+    }
+
+    public void Dispose() => _cleanupTimer?.Dispose();
+
+    private class UserRateLimit
+    {
+        public DateTime WindowStart { get; set; } = DateTime.UtcNow;
+        public int Count { get; set; }
+    }
+}

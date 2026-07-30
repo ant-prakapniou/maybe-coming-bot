@@ -1,132 +1,260 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using MaybeComingBot.Abstractions;
+using MaybeComingBot.Models;
+using MaybeComingBot.Services;
+using MaybeComingBot.Utils;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using System.Collections.Concurrent;
+using Serilog;
 using System.Text;
-using MaybeComingBot.Console.Models;
-using MaybeComingBot.Console.Services;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
-namespace MaybeComingBot.Console;
+namespace MaybeComingBot;
 
 public class Program
 {
-    private static readonly ConcurrentDictionary<long, UserState> UserStates = new();
-
     public static async Task Main(string[] args)
     {
-        System.Console.OutputEncoding = Encoding.UTF8;
+        Console.OutputEncoding = Encoding.UTF8;
 
-        using IHost host = Host.CreateDefaultBuilder(args)
+        Log.Logger = new LoggerConfiguration()
+            .WriteTo.Console()
+            .WriteTo.File(
+                "logs/bot-.txt",
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 7,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+            .MinimumLevel.Information()
+            .CreateLogger();
+
+        try
+        {
+            Log.Information("🚀 Bot starting...");
+
+            var host = CreateHostBuilder(args).Build();
+
+            await ValidateConfigurationAndAdminAsync(host);
+
+            await LoadScheduleAsync(host);
+
+            await RunBotAsync(host);
+            await host.WaitForShutdownAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Bot terminated unexpectedly");
+            throw;
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+        }
+    }
+
+    private static IHostBuilder CreateHostBuilder(string[] args)
+    {
+        return Host.CreateDefaultBuilder(args)
+            .ConfigureHostConfiguration(config =>
+            {
+                config.SetBasePath(Directory.GetCurrentDirectory());
+                config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+                config.AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"}.json", optional: true);
+                config.AddEnvironmentVariables();
+            })
+            .UseSerilog()
             .ConfigureServices((context, services) =>
             {
-                // 1. Привязываем секцию "Bot" к BotSettings
                 services.Configure<BotSettings>(context.Configuration.GetSection("Bot"));
 
-                // 2. Регистрируем HttpClient для ScheduleLoader
-                services.AddHttpClient<ScheduleLoader>();
+                services.AddOptions<BotSettings>()
+                    .Bind(context.Configuration.GetSection("Bot"))
+                    .ValidateDataAnnotations()
+                    .ValidateOnStart();
 
-                // 3. Регистрируем хранилище данных как синглтон
-                services.AddSingleton<ScheduleStorage>();
+                services.AddHttpClient<ScheduleLoader>()
+                    .AddPolicyHandler(PollyPolicyExtensions.GetRetryPolicy())
+                    .AddPolicyHandler(PollyPolicyExtensions.GetTimeoutPolicy())
+                    .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
-                // 4. Регистрируем загрузчик как скоуп
-                services.AddScoped<ScheduleLoader>();
-
-                // 5. Регистрируем TelegramBotClient (используем токен из BotSettings)
                 services.AddSingleton<ITelegramBotClient>(provider =>
                 {
                     var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;
                     return new TelegramBotClient(settings.BotToken);
                 });
 
-                // 6. Регистрируем BotHandler как скоуп
-                services.AddScoped<BotHandler>();
+                services.AddSingleton<IValidateOptions<BotSettings>, BotSettingsValidator>();
+                services.AddSingleton<ScheduleStorage>();
+                services.AddSingleton<RateLimiter>();
+                services.AddSingleton<IUserStateService, UserStateService>();
 
-                // 7. Регистрируем словарь состояний пользователей как синглтон
-                services.AddSingleton(UserStates);
-            })
-            .Build();
+                services.AddSingleton<ScheduleRefreshService>();
+                services.AddHostedService(provider => provider.GetRequiredService<ScheduleRefreshService>());
 
-        // Загружаем расписание при старте
-        using (var scope = host.Services.CreateScope())
+                services.AddSingleton<BotHandler>();
+
+                services.AddHostedService<UserStateCleanupService>();
+            });
+    }
+
+    private static async Task ValidateConfigurationAndAdminAsync(IHost host)
+    {
+        var settings = host.Services.GetRequiredService<IOptions<BotSettings>>().Value;
+        var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
+        var logger = Log.ForContext<Program>();
+
+        logger.Information("Validating configuration...");
+
+        try
         {
-            var loader = scope.ServiceProvider.GetRequiredService<ScheduleLoader>();
-            var storage = scope.ServiceProvider.GetRequiredService<ScheduleStorage>();
-
-            try
-            {
-                var schedule = await loader.LoadAsync();
-                storage.Update(schedule);
-                System.Console.WriteLine("[INFO] Schedule loaded successfully.");
-            }
-            catch (Exception ex)
-            {
-                System.Console.WriteLine($"[ERROR] Failed to load initial schedule: {ex.Message}");
-            }
+            var admin = await botClient.GetChat(settings.AdminUserId);
+            logger.Information("✅ Admin found: @{Username} (ID: {UserId})",
+                admin.Username ?? "no_username",
+                settings.AdminUserId);
         }
+        catch (ApiRequestException ex) when (ex.ErrorCode == 400)
+        {
+            logger.Error("❌ AdminUserId {AdminUserId} does not exist", settings.AdminUserId);
+            throw new InvalidOperationException(
+                $"Admin user with ID {settings.AdminUserId} not found.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "❌ Failed to validate admin user");
+            throw;
+        }
+    }
 
-        // Получаем бота и обработчик
+    private static async Task LoadScheduleAsync(IHost host)
+    {
+        var logger = Log.ForContext<Program>();
+        logger.Information("⏳ Loading schedule before bot start...");
+
+        try
+        {
+            using var scope = host.Services.CreateScope();
+            var storage = scope.ServiceProvider.GetRequiredService<ScheduleStorage>();
+            var loader = scope.ServiceProvider.GetRequiredService<ScheduleLoader>();
+
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    logger.Information("Attempt {Attempt}/3 loading schedule...", attempt);
+                    var schedule = await loader.LoadAsync();
+
+                    logger.Information("Schedule loaded: Stops={Count}, IsNull={IsNull}",
+                        schedule?.Stops?.Count ?? 0, schedule is null);
+
+                    if (schedule?.Stops is not null && schedule.Stops.Count > 0)
+                    {
+                        storage.Update(schedule);
+
+                        var hasData = storage.HasData();
+                        var stopCount = storage.StopCount;
+                        var allStops = storage.GetAllStops().ToList();
+
+                        logger.Information("✅ After Update: HasData={HasData}, StopCount={StopCount}, GetAllStops.Count={Count}",
+                            hasData, stopCount, allStops.Count);
+
+                        return;
+                    }
+
+                    logger.Warning("Schedule loaded but empty (attempt {Attempt})", attempt);
+                }
+                catch (Exception ex)
+                {
+                    logger.Warning(ex, "Load attempt {Attempt} failed", attempt);
+                }
+
+                if (attempt < 3)
+                {
+                    var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                    logger.Information("Retrying in {Delay}s...", delay.TotalSeconds);
+                    await Task.Delay(delay);
+                }
+            }
+
+            throw new InvalidOperationException(
+                "Failed to load schedule after 3 attempts. " +
+                "Check JsonUrl in appsettings.json and network connectivity.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error(ex, "❌ CRITICAL: Failed to load schedule. Bot will not start.");
+            throw;
+        }
+    }
+
+    private static async Task RunBotAsync(IHost host)
+    {
+        var logger = Log.ForContext<Program>();
         var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
         var handler = host.Services.GetRequiredService<BotHandler>();
 
-        // Настраиваем получение обновлений
         var receiverOptions = new ReceiverOptions
         {
             AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery]
         };
 
-        // Запускаем бота
-        System.     Console.WriteLine("🚀 Бот запущен. Нажмите Ctrl+C для остановки.");
+        var me = await botClient.GetMe();
+        logger.Information("🤖 Bot started: @{Username}", me.Username);
+        logger.Information("🔄 Press Ctrl+C to stop.");
 
-        try
+        using var cts = new CancellationTokenSource();
+
+        Console.CancelKeyPress += (s, e) =>
         {
-            using var cts = new CancellationTokenSource();
-            System.Console.CancelKeyPress += (s, e) =>
+            e.Cancel = true;
+            cts.Cancel();
+            logger.Information("Shutdown signal received");
+        };
+
+        while (!cts.Token.IsCancellationRequested)
+        {
+            try
             {
-                e.Cancel = true;
-                cts.Cancel();
-                System.Console.WriteLine("⏹️ Бот остановлен.");
-            };
-
-            // Начинаем получать обновления
-            await botClient.ReceiveAsync(
-                updateHandler: async (client, update, cancellationToken) =>
-                {
-                    try
+                await botClient.ReceiveAsync(
+                    updateHandler: async (client, update, cancellationToken) =>
                     {
-                        await handler.HandleUpdateAsync(update);
-                    }
-                    catch (Exception ex)
+                        try
+                        {
+                            await handler.HandleUpdateAsync(update);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.Error(ex, "Error handling update");
+                        }
+                    },
+                    errorHandler: (client, exception, cancellationToken) =>
                     {
-                        System.Console.WriteLine($"[ERROR] Update handling error: {ex.Message}");
-                    }
-                },
-                errorHandler: async (client, exception, cancellationToken) =>
-                {
-                    System.Console.WriteLine($"[ERROR] Polling error: {exception.Message}");
-                    await Task.CompletedTask;
-                },
-                receiverOptions,
-                cancellationToken: cts.Token
-            );
-        }
-        catch (TaskCanceledException)
-        {
-            System.Console.WriteLine("⏹️ Бот остановлен.");
-        }
-        catch (Exception ex)
-        {
-            System.Console.WriteLine($"[FATAL] {ex.Message}");
-            throw;
-        }
-        finally
-        {
-            System.Console.WriteLine("👋 Завершение работы...");
-            await host.StopAsync();
+                        if (exception is ApiRequestException apiEx)
+                        {
+                            logger.Warning(apiEx, "Polling error: {Message}", apiEx.Message);
+                        }
+                        else
+                        {
+                            logger.Error(exception, "Polling error");
+                        }
+                        return Task.CompletedTask;
+                    },
+                    receiverOptions,
+                    cancellationToken: cts.Token
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                logger.Information("Bot stopped gracefully");
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Bot crashed. Restarting in 5 seconds...");
+                await Task.Delay(5000, cts.Token);
+            }
         }
     }
 }

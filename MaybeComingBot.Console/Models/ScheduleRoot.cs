@@ -1,6 +1,6 @@
-﻿namespace MaybeComingBot.Console.Models;
+﻿namespace MaybeComingBot.Models;
 
 public sealed class ScheduleRoot
 {
-    public List<Stop> Stops { get; set; }
+    public List<Stop> Stops { get; set; } = [];
 }

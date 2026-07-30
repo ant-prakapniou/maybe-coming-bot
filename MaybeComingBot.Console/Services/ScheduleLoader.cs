@@ -1,40 +1,74 @@
-﻿using System.Net.Http.Json;
-using MaybeComingBot.Console.Models;
-using Microsoft.Extensions.Configuration;
+﻿using MaybeComingBot.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Net.Http.Json;
+using System.Text.Json;
 
-namespace MaybeComingBot.Console.Services;
+namespace MaybeComingBot.Services;
 
-/// <summary>
-/// Сервис для загрузки расписания из JSON-файла по ссылке.
-/// </summary>
-public class ScheduleLoader
+public class ScheduleLoader(
+    HttpClient httpClient,
+    IOptions<BotSettings> settings,
+    ILogger<ScheduleLoader> logger)
 {
-    private readonly HttpClient _httpClient;
-    private readonly string _jsonUrl;
+    private readonly HttpClient _httpClient = httpClient;
+    private readonly string _jsonUrl = settings.Value.JsonUrl;
+    private readonly ILogger<ScheduleLoader> _logger = logger;
 
-    public ScheduleLoader(HttpClient httpClient, IConfiguration configuration)
+    private static readonly JsonSerializerOptions _jsonOptions = new()
     {
-        _httpClient = httpClient;
+        PropertyNameCaseInsensitive = true,
+        AllowTrailingCommas = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = false
+    };
 
-        // Читаем JsonUrl из секции "Bot"
-        _jsonUrl = configuration["Bot:JsonUrl"]
-            ?? throw new InvalidOperationException("JsonUrl is not configured in Bot section.");
-    }
+    public string JsonUrl => _jsonUrl;
 
-    /// <summary>
-    /// Загружает и десериализует расписание из удалённого JSON-файла.
-    /// </summary>
-    public async Task<ScheduleRoot> LoadAsync()
+    public async Task<ScheduleRoot> LoadAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            var schedule = await _httpClient.GetFromJsonAsync<ScheduleRoot>(_jsonUrl);
-            return schedule ?? new ScheduleRoot { Stops = new List<Stop>() };
+            _logger.LogInformation("Loading schedule from {JsonUrl}", _jsonUrl);
+
+            var schedule = await _httpClient.GetFromJsonAsync<ScheduleRoot>(
+                _jsonUrl,
+                _jsonOptions,
+                cancellationToken);
+
+            if (schedule is null)
+            {
+                _logger.LogWarning("Schedule deserialized to null, returning empty schedule");
+                return new ScheduleRoot { Stops = [] };
+            }
+
+            if (schedule.Stops is null)
+            {
+                _logger.LogWarning("Schedule.Stops is null, initializing empty list");
+                schedule.Stops = [];
+            }
+
+            _logger.LogInformation("Schedule loaded successfully. Stops: {StopCount}", schedule.Stops.Count);
+            return schedule;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "JSON deserialization error loading schedule from {JsonUrl}", _jsonUrl);
+            throw new InvalidOperationException($"Failed to parse JSON: {ex.Message}", ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "HTTP error loading schedule from {JsonUrl}", _jsonUrl);
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "Timeout loading schedule from {JsonUrl}", _jsonUrl);
+            throw;
         }
         catch (Exception ex)
         {
-            // Логируем ошибку
-            System.Console.WriteLine($"[ERROR] Failed to load schedule: {ex.Message}");
+            _logger.LogError(ex, "Unexpected error loading schedule from {JsonUrl}", _jsonUrl);
             throw;
         }
     }
