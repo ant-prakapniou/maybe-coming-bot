@@ -36,13 +36,13 @@ public class UserStateCleanupService : BackgroundService
                     break;
 
                 var expiredKeys = _userStateService.GetExpiredKeys(_expiry).ToList();
-                if (expiredKeys.Count > 0)
-                {
-                    foreach (var key in expiredKeys)
-                        _userStateService.Clear(key);
+                if (expiredKeys.Count == 0)
+                    continue;
 
-                    _logger.LogInformation("Cleaned up {Count} expired user states", expiredKeys.Count);
-                }
+                foreach (var key in expiredKeys)
+                    _userStateService.Clear(key);
+
+                _logger.LogInformation("Cleaned up {Count} expired user states", expiredKeys.Count);
             }
             catch (OperationCanceledException)
             {
@@ -51,6 +51,8 @@ public class UserStateCleanupService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during user state cleanup");
+                // Не подавляем исключение полностью, но даём сервису продолжить работу
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
 

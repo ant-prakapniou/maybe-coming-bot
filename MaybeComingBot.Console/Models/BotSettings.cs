@@ -12,8 +12,9 @@ public class BotSettings
     [Url(ErrorMessage = "JsonUrl must be a valid URL")]
     public string JsonUrl { get; set; } = string.Empty;
 
-    [Required(ErrorMessage = "AdminUserId is required")]
-    public long AdminUserId { get; set; }
+    [Required(ErrorMessage = "At least one AdminUserId is required")]
+    [MinLength(1, ErrorMessage = "At least one admin user ID must be specified")]
+    public long[] AdminUserIds { get; set; } = [];
 
     [Range(0, 168, ErrorMessage = "UpdateIntervalHours must be between 0 and 168 (7 days)")]
     public int UpdateIntervalHours { get; set; } = 24;

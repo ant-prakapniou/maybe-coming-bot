@@ -34,7 +34,7 @@ public class Program
             Log.Information("🚀 Bot initializing...");
             var host = CreateHostBuilder(args).Build();
             await ValidateConfigurationAndAdminAsync(host);
-            await RunBotAsync(host);
+            await RunBotWithRestartAsync(host);
             await host.WaitForShutdownAsync();
         }
         catch (Exception ex)
@@ -68,14 +68,22 @@ public class Program
                     .ValidateDataAnnotations()
                     .ValidateOnStart();
 
-                services.AddHttpClient<ScheduleLoader>()
-                    .AddPolicyHandler((provider, _) =>
+                services.AddHttpClient(nameof(ScheduleLoader), client =>
+                {
+                    var settings = context.Configuration.GetSection("Bot").Get<BotSettings>();
+                    if (settings is not null && !string.IsNullOrEmpty(settings.JsonUrl))
                     {
-                        var settings = provider.GetRequiredService<IOptions<BotSettings>>();
-                        return PollyPolicyExtensions.GetRetryPolicy(settings);
-                    })
-                    .AddPolicyHandler(PollyPolicyExtensions.GetTimeoutPolicy())
-                    .SetHandlerLifetime(TimeSpan.FromMinutes(5));
+                        client.BaseAddress = new Uri(settings.JsonUrl);
+                    }
+                    client.Timeout = TimeSpan.FromSeconds(30);
+                })
+                .AddPolicyHandler((provider, _) =>
+                {
+                    var settings = provider.GetRequiredService<IOptions<BotSettings>>();
+                    return PollyPolicyExtensions.GetRetryPolicy(settings);
+                })
+                .AddPolicyHandler(PollyPolicyExtensions.GetTimeoutPolicy())
+                .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
                 services.AddSingleton<ITelegramBotClient>(provider =>
                 {
@@ -91,27 +99,15 @@ public class Program
                 services.AddSingleton<TelegramSender>();
                 services.AddSingleton<StopSelectionGuard>();
                 services.AddSingleton<ScheduleFormatter>();
-                services.AddSingleton<CommandDispatcher>(provider =>
-                {
-                    var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;
-                    return new CommandDispatcher(
-                        provider.GetRequiredService<ITelegramBotClient>(),
-                        provider.GetRequiredService<IScheduleStorage>(),
-                        provider.GetRequiredService<IUserStateService>(),
-                        provider.GetRequiredService<ScheduleRefreshService>(),
-                        provider.GetRequiredService<ScheduleFormatter>(),
-                        provider.GetRequiredService<StopSelectionGuard>(),
-                        provider.GetRequiredService<TelegramSender>(),
-                        settings.AdminUserId,
-                        provider.GetRequiredService<ILogger<CommandDispatcher>>());
-                });
+                services.AddSingleton<ScheduleLoader>();
+                services.AddSingleton<IScheduleRefreshService, ScheduleRefreshService>();
+
+                services.AddSingleton<CommandDispatcher>();
 
                 services.AddSingleton<BotHandler>();
-
-                services.AddSingleton<ScheduleRefreshService>();
-                services.AddHostedService(provider => provider.GetRequiredService<ScheduleRefreshService>());
-
+                services.AddHostedService<ScheduleRefreshService>();
                 services.AddHostedService<UserStateCleanupService>();
+                services.AddHealthChecks().AddCheck<BotHealthCheck>("bot_health");
             });
     }
 
@@ -121,25 +117,28 @@ public class Program
         var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
         var logger = Log.ForContext<Program>();
 
-        try
+        foreach (var adminId in settings.AdminUserIds)
         {
-            var admin = await botClient.GetChat(settings.AdminUserId);
-            logger.Information("✅ Admin: @{Username} (ID: {UserId})",
-                admin.Username ?? "NO_USERNAME", settings.AdminUserId);
-        }
-        catch (ApiRequestException ex) when (ex.ErrorCode == 400)
-        {
-            logger.Error("❌ Admin ID {AdminUserId} invalid", settings.AdminUserId);
-            throw new InvalidOperationException($"Admin {settings.AdminUserId} not found.");
-        }
-        catch (Exception ex)
-        {
-            logger.Error(ex, "❌ Admin validation failed");
-            throw;
+            try
+            {
+                var admin = await botClient.GetChat(adminId);
+                logger.Information("✅ Admin: @{Username} (ID: {UserId})",
+                    admin.Username ?? "NO_USERNAME", adminId);
+            }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400)
+            {
+                logger.Error("❌ Admin ID {AdminUserId} invalid", adminId);
+                throw new InvalidOperationException($"Admin {adminId} not found.");
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "❌ Admin validation failed for {AdminUserId}", adminId);
+                throw;
+            }
         }
     }
 
-    private static async Task RunBotAsync(IHost host)
+    private static async Task RunBotWithRestartAsync(IHost host)
     {
         var logger = Log.ForContext<Program>();
         var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
@@ -157,34 +156,38 @@ public class Program
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (s, e) => { e.Cancel = true; cts.Cancel(); };
 
-        try
+        while (!cts.Token.IsCancellationRequested)
         {
-            await botClient.ReceiveAsync(
-                updateHandler: async (_, update, _) =>
-                {
-                    try { await handler.HandleUpdateAsync(update); }
-                    catch (Exception ex) { logger.Error(ex, "Update error"); }
-                },
-                errorHandler: (_, exception, _) =>
-                {
-                    if (exception is ApiRequestException apiEx)
-                        logger.Warning(apiEx, "Polling error");
-                    else
-                        logger.Error(exception, "Polling error");
-                    return Task.CompletedTask;
-                },
-                receiverOptions,
-                cancellationToken: cts.Token
-            );
-        }
-        catch (OperationCanceledException)
-        {
-            logger.Information("Bot stopped.");
-        }
-        catch (Exception ex)
-        {
-            logger.Error(ex, "Bot crashed.");
-            throw;
+            try
+            {
+                await botClient.ReceiveAsync(
+                    updateHandler: async (_, update, _) =>
+                    {
+                        try { await handler.HandleUpdateAsync(update); }
+                        catch (Exception ex) { logger.Error(ex, "Update error"); }
+                    },
+                    errorHandler: (_, exception, _) =>
+                    {
+                        if (exception is ApiRequestException apiEx)
+                            logger.Warning(apiEx, "Polling error");
+                        else
+                            logger.Error(exception, "Polling error");
+                        return Task.CompletedTask;
+                    },
+                    receiverOptions,
+                    cancellationToken: cts.Token
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                logger.Information("Bot stopped by user.");
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.Error(ex, "Bot crashed. Restarting in 10 seconds...");
+                await Task.Delay(TimeSpan.FromSeconds(10), cts.Token);
+            }
         }
     }
 }

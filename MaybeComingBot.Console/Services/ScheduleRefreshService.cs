@@ -8,8 +8,10 @@ using Microsoft.Extensions.Options;
 
 namespace MaybeComingBot.Services;
 
-public class ScheduleRefreshService : BackgroundService
+public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
 {
+    private const int MaxBackoffFailureCount = 30;
+
     private readonly ScheduleLoader _loader;
     private readonly IScheduleStorage _storage;
     private readonly int _intervalHours;
@@ -18,6 +20,9 @@ public class ScheduleRefreshService : BackgroundService
     private int _failureCount;
     private DateTime _lastSuccessfulUpdate = DateTime.MinValue;
     private DateTime _lastAttemptTime = DateTime.MinValue;
+
+    public DateTime LastSuccessfulUpdate => _lastSuccessfulUpdate;
+    public int FailureCount => Interlocked.CompareExchange(ref _failureCount, 0, 0);
 
     public ScheduleRefreshService(
         ScheduleLoader loader,
@@ -35,17 +40,37 @@ public class ScheduleRefreshService : BackgroundService
     {
         _logger.LogInformation("Refresh service started");
 
-        await RefreshScheduleAsync(stoppingToken);
+        try
+        {
+            await RefreshScheduleWithLockAsync(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "Initial refresh failed");
+            throw;
+        }
 
         if (!_storage.HasData() && _intervalHours > 0)
         {
             _logger.LogWarning("Initial load failed, retrying in 30s");
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-            await RefreshScheduleAsync(stoppingToken);
+
+            try
+            {
+                await RefreshScheduleWithLockAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex, "Retry initial refresh failed");
+                throw;
+            }
         }
 
         if (!_storage.HasData())
+        {
             _logger.LogCritical("NO SCHEDULE DATA");
+            throw new InvalidOperationException("Schedule data could not be loaded");
+        }
 
         if (_intervalHours <= 0)
         {
@@ -58,9 +83,13 @@ public class ScheduleRefreshService : BackgroundService
             try
             {
                 var delay = CalculateDelay();
+                _logger.LogDebug("Next refresh in {Delay}", delay);
                 await Task.Delay(delay, stoppingToken);
-                if (stoppingToken.IsCancellationRequested) break;
-                await RefreshScheduleAsync(stoppingToken);
+
+                if (stoppingToken.IsCancellationRequested)
+                    break;
+
+                await RefreshScheduleWithLockAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -69,22 +98,14 @@ public class ScheduleRefreshService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Refresh loop error");
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                throw;
             }
         }
     }
 
     public async Task ForceRefreshAsync(CancellationToken ct = default)
     {
-        await _refreshLock.WaitAsync(ct);
-        try
-        {
-            await RefreshScheduleInternalAsync(ct);
-        }
-        finally
-        {
-            _refreshLock.Release();
-        }
+        await RefreshScheduleWithLockAsync(ct);
     }
 
     public string GetStatus()
@@ -93,7 +114,12 @@ public class ScheduleRefreshService : BackgroundService
             return "NOT LOADED";
 
         var age = DateTime.UtcNow - _lastSuccessfulUpdate;
-        return $"LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan((int)age.TotalMinutes)})";
+        var ageStr = TimeHelper.FormatTimeSpan((int)age.TotalMinutes);
+
+        if (age > TimeSpan.FromHours(_intervalHours * 1.5))
+            return $"⚠️ DATA STALE: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
+
+        return $"✅ LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
     }
 
     public string GetLastAttemptInfo()
@@ -105,7 +131,7 @@ public class ScheduleRefreshService : BackgroundService
         return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan((int)age.TotalMinutes)}), FAILS: {_failureCount}";
     }
 
-    private async Task RefreshScheduleAsync(CancellationToken ct)
+    private async Task RefreshScheduleWithLockAsync(CancellationToken ct)
     {
         await _refreshLock.WaitAsync(ct);
         try
@@ -150,7 +176,7 @@ public class ScheduleRefreshService : BackgroundService
         if (failureCount <= 0)
             return TimeSpan.FromHours(_intervalHours);
 
-        int backoff = failureCount > 30
+        int backoff = failureCount > MaxBackoffFailureCount
             ? TimeConstants.MaxRetryDelayMinutes
             : Math.Min(TimeConstants.BaseRetryDelayMinutes * (1 << (failureCount - 1)), TimeConstants.MaxRetryDelayMinutes);
 

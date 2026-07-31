@@ -10,9 +10,10 @@ public class RateLimiter : IDisposable
     private readonly ConcurrentDictionary<long, UserRateLimit> _userLimits = new();
     private readonly int _maxRequests;
     private readonly TimeSpan _window;
-    private readonly HashSet<long> _adminUserIds;
+    private readonly long[] _adminUserIds;
     private readonly ILogger<RateLimiter> _logger;
     private readonly Timer _cleanupTimer;
+    private readonly SemaphoreSlim _cleanupLock = new(1, 1);
 
     public RateLimiter(
         IOptions<BotSettings> settings,
@@ -20,7 +21,7 @@ public class RateLimiter : IDisposable
     {
         _maxRequests = settings.Value.RateLimitMaxRequests;
         _window = TimeSpan.FromMinutes(settings.Value.RateLimitWindowMinutes);
-        _adminUserIds = [settings.Value.AdminUserId];
+        _adminUserIds = settings.Value.AdminUserIds;
         _logger = logger;
 
         _cleanupTimer = new Timer(CleanupExpiredEntries, null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
@@ -62,24 +63,34 @@ public class RateLimiter : IDisposable
         {
             lock (limit)
             {
-                if (now - limit.WindowStart > TimeSpan.FromMinutes(5))
+                if (now - limit.WindowStart > _window * 2)
+                {
                     _userLimits.TryRemove(userId, out _);
+                }
             }
         }
     }
 
-    private void CleanupExpiredEntries(object? state)
+    private async void CleanupExpiredEntries(object? state)
     {
+        if (!await _cleanupLock.WaitAsync(0))
+            return;
+
         try
         {
             var now = DateTime.UtcNow;
             var expiredKeys = _userLimits
-                .Where(kvp => now - kvp.Value.WindowStart > TimeSpan.FromMinutes(5))
+                .Where(kvp => now - kvp.Value.WindowStart > _window * 2)
                 .Select(kvp => kvp.Key)
                 .ToList();
 
             foreach (var key in expiredKeys)
-                _userLimits.TryRemove(key, out _);
+            {
+                if (_userLimits.TryRemove(key, out _))
+                {
+                    _logger.LogDebug("Cleaned up expired rate limit entry for {UserId}", key);
+                }
+            }
 
             if (expiredKeys.Count > 0)
                 _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
@@ -88,9 +99,17 @@ public class RateLimiter : IDisposable
         {
             _logger.LogError(ex, "Error cleaning up rate limit entries");
         }
+        finally
+        {
+            _cleanupLock.Release();
+        }
     }
 
-    public void Dispose() => _cleanupTimer?.Dispose();
+    public void Dispose()
+    {
+        _cleanupTimer?.Dispose();
+        _cleanupLock?.Dispose();
+    }
 
     private class UserRateLimit
     {

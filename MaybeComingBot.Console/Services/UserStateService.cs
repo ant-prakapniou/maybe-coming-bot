@@ -69,9 +69,12 @@ public class UserStateService : IUserStateService
     public IEnumerable<long> GetExpiredKeys(TimeSpan expiry)
     {
         var now = DateTime.UtcNow;
-        return _states
-            .Where(kvp => now - kvp.Value.LastActivity > expiry)
-            .Select(kvp => kvp.Key)
+        // Создаём список ключей для избежания изменений коллекции во время итерации
+        var keys = _states.Keys.ToList();
+
+        return keys
+            .Where(key => _states.TryGetValue(key, out var state) &&
+                          now - state.LastActivity > expiry)
             .ToList();
     }
 

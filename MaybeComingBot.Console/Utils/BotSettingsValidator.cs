@@ -1,9 +1,6 @@
 ﻿using MaybeComingBot.Models;
 using Microsoft.Extensions.Options;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Text;
 
 namespace MaybeComingBot.Utils;
 
@@ -23,6 +20,11 @@ public class BotSettingsValidator : IValidateOptions<BotSettings>
         if (!Uri.TryCreate(options.JsonUrl, UriKind.Absolute, out _))
         {
             return ValidateOptionsResult.Fail("JsonUrl must be a valid absolute URL");
+        }
+
+        if (options.AdminUserIds is null || options.AdminUserIds.Length == 0)
+        {
+            return ValidateOptionsResult.Fail("At least one admin user ID must be specified");
         }
 
         return ValidateOptionsResult.Success;

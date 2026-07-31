@@ -54,20 +54,29 @@ public class TelegramSender
                     parseMode: actualParseMode,
                     replyMarkup: replyMarkup,
                     cancellationToken: ct);
+
+                _logger.LogDebug("Message sent to {ChatId}", chatId);
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 403)
             {
-                _logger.LogWarning("Blocked or chat not found: {ChatId}", chatId);
+                _logger.LogWarning(ex, "Bot blocked or chat not found: {ChatId}", chatId);
+                // Не пробрасываем исключение — сообщение не может быть доставлено
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && actualParseMode != ParseMode.None)
             {
-                _logger.LogWarning("Parse error, retrying plain text");
+                _logger.LogWarning(ex, "Parse error for {ChatId}, retrying plain text", chatId);
                 actualParseMode = ParseMode.None;
                 await _botClient.SendMessage(chatId, actualText, replyMarkup: replyMarkup, cancellationToken: ct);
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400)
             {
-                _logger.LogWarning("Bad request: {Message}", ex.Message);
+                _logger.LogWarning(ex, "Bad request for {ChatId}: {Message}", chatId, ex.Message);
+                // Не пробрасываем — ошибка формата сообщения
+            }
+            catch (ApiRequestException ex)
+            {
+                _logger.LogError(ex, "Telegram API error for {ChatId}", chatId);
+                throw; // Пробрасываем для retry-политики
             }
         });
     }

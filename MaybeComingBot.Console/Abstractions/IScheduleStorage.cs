@@ -6,7 +6,7 @@ public interface IScheduleStorage
 {
     IEnumerable<Stop> GetAllStops();
     Stop? GetStop(string id);
-    List<Trip>? GetTripsForDay(string stopId, int day);
+    IReadOnlyList<Trip>? GetTripsForDay(string stopId, int day);
     void Update(ScheduleRoot newData);
     bool HasData();
     int StopCount { get; }

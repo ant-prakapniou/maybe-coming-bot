@@ -37,7 +37,8 @@ public class BotHandler(
 
             if (update.Type == UpdateType.CallbackQuery)
             {
-                await _dispatcher.HandleCallbackAsync(update.CallbackQuery!);
+                if (update.CallbackQuery is not null)
+                    await _dispatcher.HandleCallbackAsync(update.CallbackQuery);
                 return;
             }
 
@@ -69,11 +70,18 @@ public class BotHandler(
         catch (ApiRequestException apiEx)
         {
             _logger.LogWarning(apiEx, "Telegram API error: {ErrorCode}", apiEx.ErrorCode);
+            // Не пробрасываем — бот продолжает работать
+        }
+        catch (TaskCanceledException)
+        {
+            _logger.LogInformation("Update handling cancelled");
+            // Не пробрасываем — корректная остановка
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error handling update");
-            throw;
+            _logger.LogError(ex, "Unhandled error handling update (UserId: {UserId}, ChatId: {ChatId})",
+                GetUserId(update), GetChatId(update));
+            // Не пробрасываем — бот продолжает работать
         }
     }
 

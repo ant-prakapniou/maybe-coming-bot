@@ -17,13 +17,14 @@ public class ScheduleFormatter(
     {
         var now = DateTime.Now;
         var day = (int)now.DayOfWeek;
-        var trips = _storage.GetTripsForDay(stop.Id, day);
 
-        if (trips is null || trips.Count == 0)
+        var todayTrips = _storage.GetTripsForDay(stop.Id, day);
+
+        if (todayTrips is null || todayTrips.Count == 0)
             return BotMessages.NoTripsToday(stop.Name, (DayOfWeek)day);
 
         var nowMinutes = now.Hour * TimeConstants.MinutesInHour + now.Minute;
-        var sorted = trips
+        var sorted = todayTrips
             .Select(t => new { Trip = t, Minutes = TimeHelper.ToMinutes(t.Time) })
             .Where(x => x.Minutes.HasValue)
             .OrderBy(x => x.Minutes)
@@ -50,7 +51,7 @@ public class ScheduleFormatter(
         var nearest = sorted[index];
         var next = index + 1 < sorted.Count ? sorted[index + 1] : null;
         var wait = nearest.Minutes.Value - nowMinutes;
-        if (wait < 0) wait += TimeConstants.DayMinutes;
+        if (wait < 0) wait += TimeConstants.MinutesInDay;
 
         var response = $"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
         response += $"🟢 *NEXT:* {nearest.Trip.Time}";
@@ -66,7 +67,7 @@ public class ScheduleFormatter(
             if (next.Minutes.HasValue)
             {
                 var nextWait = next.Minutes.Value - nowMinutes;
-                if (nextWait < 0) nextWait += TimeConstants.DayMinutes;
+                if (nextWait < 0) nextWait += TimeConstants.MinutesInDay;
                 response += $"\n⏱ *IN {TimeHelper.FormatTimeSpan(nextWait)}*";
             }
         }
@@ -113,10 +114,16 @@ public class ScheduleFormatter(
     {
         var response = $"📅 *WEEK SCHEDULE*\n🚏 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
 
+        var daysCache = new List<(int Day, IReadOnlyList<Trip>? Trips)>();
         for (int day = 0; day < 7; day++)
         {
-            var dayName = (DayOfWeek)day;
             var trips = _storage.GetTripsForDay(stop.Id, day);
+            daysCache.Add((day, trips));
+        }
+
+        foreach (var (day, trips) in daysCache)
+        {
+            var dayName = (DayOfWeek)day;
             response += $"*{dayName}*: ";
 
             if (trips is null || trips.Count == 0)

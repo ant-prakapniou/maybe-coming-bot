@@ -3,6 +3,7 @@ using MaybeComingBot.Constants;
 using MaybeComingBot.Models;
 using MaybeComingBot.Utils;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -14,22 +15,24 @@ public class CommandDispatcher(
     ITelegramBotClient botClient,
     IScheduleStorage storage,
     IUserStateService userStateService,
-    ScheduleRefreshService refreshService,
+    IScheduleRefreshService refreshService,
     ScheduleFormatter formatter,
     StopSelectionGuard guard,
     TelegramSender sender,
-    long adminUserId,
+    IOptions<BotSettings> settings,
     ILogger<CommandDispatcher> logger)
 {
     private readonly ITelegramBotClient _botClient = botClient;
     private readonly IScheduleStorage _storage = storage;
     private readonly IUserStateService _userStateService = userStateService;
-    private readonly ScheduleRefreshService _refreshService = refreshService;
+    private readonly IScheduleRefreshService _refreshService = refreshService;
     private readonly ScheduleFormatter _formatter = formatter;
     private readonly StopSelectionGuard _guard = guard;
     private readonly TelegramSender _sender = sender;
-    private readonly long _adminUserId = adminUserId;
+    private readonly long[] _adminUserIds = settings.Value.AdminUserIds;
     private readonly ILogger<CommandDispatcher> _logger = logger;
+
+    private bool IsAdmin(long userId) => _adminUserIds.Contains(userId);
 
     public async Task DispatchCommandAsync(long chatId, long userId, string command, string? args)
     {
@@ -120,7 +123,9 @@ public class CommandDispatcher(
             return;
         }
 
-        var stop = _storage.GetStop(data);
+        var stopId = data.Split('|')[0];
+        var stop = _storage.GetStop(stopId);
+
         if (stop is null)
         {
             _logger.LogWarning("Stop not found for callback: {Data}", data);
@@ -142,7 +147,7 @@ public class CommandDispatcher(
 
         if (!_storage.HasData() || allStops.Count == 0)
         {
-            if (userId == _adminUserId)
+            if (IsAdmin(userId))
             {
                 var adminKeyboard = new InlineKeyboardMarkup(
                     InlineKeyboardButton.WithCallbackData("🔄 REFRESH", "admin_refresh"));
@@ -165,7 +170,7 @@ public class CommandDispatcher(
 
     private async Task HandleUpdateAsync(long chatId, long userId)
     {
-        if (userId != _adminUserId)
+        if (!IsAdmin(userId))
         {
             await _sender.SendAsync(chatId, BotMessages.NoRights);
             return;
@@ -188,7 +193,7 @@ public class CommandDispatcher(
 
     private async Task HandleStatusAsync(long chatId, long userId)
     {
-        if (userId != _adminUserId)
+        if (!IsAdmin(userId))
         {
             await _sender.SendAsync(chatId, BotMessages.NoRights);
             return;
@@ -220,7 +225,10 @@ public class CommandDispatcher(
 
             var adminMsg = $"📨 *NEW REPORT*\n\nUSER: {TimeHelper.EscapeMarkdown(fullName)}\nID: {userId}\nUSERNAME: {TimeHelper.EscapeMarkdown(username)}\n\n*MESSAGE:*\n{TimeHelper.EscapeMarkdown(reportText)}";
 
-            await _botClient.SendMessage(_adminUserId, adminMsg, parseMode: ParseMode.Markdown);
+            foreach (var adminId in _adminUserIds)
+            {
+                await _botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown);
+            }
             await _sender.SendAsync(chatId, "✅ REPORT SENT. THANK YOU.");
         }
         catch (Exception ex)
@@ -232,15 +240,16 @@ public class CommandDispatcher(
 
     private async Task ShowReportInstructionsAsync(long chatId)
     {
+        var firstAdminId = _adminUserIds.Length > 0 ? _adminUserIds[0] : 0;
         await _sender.SendAsync(
             chatId,
-            BotMessages.ReportInstructions($"tg://user?id={_adminUserId}"),
+            BotMessages.ReportInstructions($"tg://user?id={firstAdminId}"),
             ParseMode.Markdown);
     }
 
     private async Task HandleAdminRefreshAsync(long chatId, long userId)
     {
-        if (userId != _adminUserId)
+        if (!IsAdmin(userId))
         {
             await _sender.SendAsync(chatId, BotMessages.NoRights);
             return;
