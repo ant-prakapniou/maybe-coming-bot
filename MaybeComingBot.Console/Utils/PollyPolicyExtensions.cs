@@ -1,4 +1,6 @@
-﻿using MaybeComingBot.Services;
+﻿using MaybeComingBot.Models;
+using MaybeComingBot.Services;
+using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Timeout;
 using Serilog;
@@ -8,8 +10,11 @@ namespace MaybeComingBot.Utils;
 
 public static class PollyPolicyExtensions
 {
-    public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
+    public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(IOptions<BotSettings> settings)
     {
+        var maxRetries = settings.Value.MaxRetryCount;
+        var baseDelay = settings.Value.RetryBaseDelaySeconds;
+
         return Policy
             .Handle<HttpRequestException>()
             .Or<TaskCanceledException>()
@@ -21,29 +26,22 @@ public static class PollyPolicyExtensions
                     or HttpStatusCode.ServiceUnavailable
                     or HttpStatusCode.GatewayTimeout)
             .WaitAndRetryAsync(
-                3,
-                retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
-                onRetry: (outcome, timespan, retryCount, context) =>
+                maxRetries,
+                retryAttempt => TimeSpan.FromSeconds(Math.Pow(baseDelay, retryAttempt)),
+                onRetry: (outcome, timespan, retryCount, _) =>
                 {
-                    Log.ForContext<ScheduleLoader>()
-                        .Warning("Retry {RetryCount} after {Delay}ms due to: {Error}",
-                            retryCount,
-                            timespan.TotalMilliseconds,
-                            outcome.Exception?.Message ?? outcome.Result?.StatusCode.ToString());
+                    if (retryCount == maxRetries)
+                    {
+                        Log.ForContext<ScheduleLoader>()
+                            .Error("All {Max} retries failed", maxRetries);
+                    }
                 });
     }
 
     public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
     {
-        return Policy
-            .TimeoutAsync<HttpResponseMessage>(
-                TimeSpan.FromSeconds(30),
-                TimeoutStrategy.Pessimistic,
-                (context, timespan, task) =>
-                {
-                    Log.ForContext<ScheduleLoader>()
-                        .Warning("Request timed out after {Timeout} seconds", timespan.TotalSeconds);
-                    return Task.CompletedTask;
-                });
+        return Policy.TimeoutAsync<HttpResponseMessage>(
+            TimeSpan.FromSeconds(30),
+            TimeoutStrategy.Optimistic);
     }
 }

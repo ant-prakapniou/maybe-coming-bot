@@ -1,21 +1,20 @@
-﻿using MaybeComingBot.Services;
+﻿using MaybeComingBot.Abstractions;
+using MaybeComingBot.Services;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace MaybeComingBot;
 
-public class BotHealthCheck(ScheduleRefreshService refreshService) : IHealthCheck
+public class BotHealthCheck(ScheduleRefreshService refreshService, IScheduleStorage storage) : IHealthCheck
 {
     private readonly ScheduleRefreshService _refreshService = refreshService;
+    private readonly IScheduleStorage _storage = storage;
 
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        if (_refreshService.HasValidData())
-        {
-            return Task.FromResult(HealthCheckResult.Healthy("Schedule data is valid"));
-        }
-
-        return Task.FromResult(HealthCheckResult.Unhealthy("Schedule data is not loaded"));
+        return _storage.HasData()
+            ? Task.FromResult(HealthCheckResult.Healthy("Schedule data is valid"))
+            : Task.FromResult(HealthCheckResult.Unhealthy("Schedule data is not loaded"));
     }
 }

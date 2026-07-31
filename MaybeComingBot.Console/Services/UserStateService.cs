@@ -17,10 +17,7 @@ public class UserStateService : IUserStateService
 
     public UserState GetOrCreate(long userId)
     {
-        return _states.GetOrAdd(userId, _ => new UserState
-        {
-            LastActivity = DateTime.UtcNow
-        });
+        return _states.GetOrAdd(userId, _ => new UserState { LastActivity = DateTime.UtcNow });
     }
 
     public bool TryGet(long userId, out UserState state)
@@ -30,34 +27,42 @@ public class UserStateService : IUserStateService
 
     public void SetStop(long userId, string stopId)
     {
-        var state = GetOrCreate(userId);
-        state.SelectedStopId = stopId;
-        state.LastActivity = DateTime.UtcNow;
+        var state = _states.GetOrAdd(userId, _ => new UserState());
+        lock (state)
+        {
+            state.SelectedStopId = stopId;
+            state.LastActivity = DateTime.UtcNow;
+            state.CommandCount++;
+        }
         _logger.LogDebug("User {UserId} selected stop {StopId}", userId, stopId);
     }
 
     public void SetUserInfo(long userId, string firstName, string? lastName, string? username)
     {
-        var state = GetOrCreate(userId);
-        state.FirstName = firstName ?? string.Empty;
-        state.LastName = lastName ?? string.Empty;
-        state.Username = username ?? string.Empty;
-        state.LastActivity = DateTime.UtcNow;
+        var state = _states.GetOrAdd(userId, _ => new UserState());
+        lock (state)
+        {
+            state.FirstName = firstName ?? state.FirstName;
+            state.LastName = lastName ?? state.LastName;
+            state.Username = username ?? state.Username;
+            state.LastActivity = DateTime.UtcNow;
+        }
     }
 
     public void Clear(long userId)
     {
         if (_states.TryRemove(userId, out _))
-        {
-            _logger.LogDebug("Cleared state for user {UserId}", userId);
-        }
+            _logger.LogDebug("Cleared state for {UserId}", userId);
     }
 
     public void UpdateActivity(long userId)
     {
         if (_states.TryGetValue(userId, out var state))
         {
-            state.LastActivity = DateTime.UtcNow;
+            lock (state)
+            {
+                state.LastActivity = DateTime.UtcNow;
+            }
         }
     }
 

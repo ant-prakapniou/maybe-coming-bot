@@ -1,27 +1,27 @@
-﻿using MaybeComingBot.Constants;
+﻿using MaybeComingBot.Abstractions;
+using MaybeComingBot.Constants;
 using MaybeComingBot.Models;
+using MaybeComingBot.Utils;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Threading;
 
 namespace MaybeComingBot.Services;
 
-public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
+public class ScheduleRefreshService : BackgroundService
 {
     private readonly ScheduleLoader _loader;
-    private readonly ScheduleStorage _storage;
+    private readonly IScheduleStorage _storage;
     private readonly int _intervalHours;
     private readonly ILogger<ScheduleRefreshService> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private int _failureCount;
     private DateTime _lastSuccessfulUpdate = DateTime.MinValue;
     private DateTime _lastAttemptTime = DateTime.MinValue;
-    private volatile bool _hasValidData;
 
     public ScheduleRefreshService(
         ScheduleLoader loader,
-        ScheduleStorage storage,
+        IScheduleStorage storage,
         IOptions<BotSettings> settings,
         ILogger<ScheduleRefreshService> logger)
     {
@@ -31,70 +31,44 @@ public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
         _logger = logger;
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        _refreshLock.Dispose();
-        await Task.CompletedTask;
-    }
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Schedule refresh service started.");
+        _logger.LogInformation("Refresh service started");
 
-        // Первичная загрузка
         await RefreshScheduleAsync(stoppingToken);
 
-        if (!_hasValidData && _intervalHours > 0)
+        if (!_storage.HasData() && _intervalHours > 0)
         {
-            _logger.LogWarning("No valid data after initial load. Retrying in 30 seconds...");
+            _logger.LogWarning("Initial load failed, retrying in 30s");
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             await RefreshScheduleAsync(stoppingToken);
         }
 
-        if (!_hasValidData)
-        {
-            _logger.LogCritical("CRITICAL: Failed to load schedule on startup. Bot may not work correctly.");
-        }
+        if (!_storage.HasData())
+            _logger.LogCritical("NO SCHEDULE DATA");
 
         if (_intervalHours <= 0)
         {
-            _logger.LogInformation("Automatic update is disabled (UpdateIntervalHours <= 0).");
+            _logger.LogInformation("Auto-update disabled");
             return;
         }
-
-        _logger.LogInformation("Schedule refresh service running. Interval: {IntervalHours} hours.",
-            _intervalHours);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var delay = CalculateDelay();
-
-                if (_failureCount > 0)
-                {
-                    _logger.LogWarning("Next retry in {Delay:g} due to {FailureCount} previous failures",
-                        delay, _failureCount);
-                }
-                else
-                {
-                    _logger.LogInformation("Next scheduled refresh in {Delay:g}", delay);
-                }
-
                 await Task.Delay(delay, stoppingToken);
-
                 if (stoppingToken.IsCancellationRequested) break;
-
                 await RefreshScheduleAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("Schedule refresh service stopped.");
                 break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected error in refresh loop");
+                _logger.LogError(ex, "Refresh loop error");
                 await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
             }
         }
@@ -105,7 +79,6 @@ public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
         await _refreshLock.WaitAsync(ct);
         try
         {
-            _logger.LogInformation("Manual refresh triggered by user");
             await RefreshScheduleInternalAsync(ct);
         }
         finally
@@ -117,24 +90,20 @@ public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
     public string GetStatus()
     {
         if (_lastSuccessfulUpdate == DateTime.MinValue)
-            return "Расписание еще не загружено";
+            return "NOT LOADED";
 
         var age = DateTime.UtcNow - _lastSuccessfulUpdate;
-        var localTime = _lastSuccessfulUpdate.ToLocalTime();
-        return $"Последнее успешное обновление: {localTime:HH:mm:ss} ({(int)age.TotalMinutes} мин. назад)";
+        return $"LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan((int)age.TotalMinutes)})";
     }
 
     public string GetLastAttemptInfo()
     {
         if (_lastAttemptTime == DateTime.MinValue)
-            return "Попыток обновления не было";
+            return "NO ATTEMPTS";
 
         var age = DateTime.UtcNow - _lastAttemptTime;
-        var localTime = _lastAttemptTime.ToLocalTime();
-        return $"Последняя попытка: {localTime:HH:mm:ss} ({(int)age.TotalMinutes} мин. назад), ошибок: {_failureCount}";
+        return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan((int)age.TotalMinutes)}), FAILS: {_failureCount}";
     }
-
-    public bool HasValidData() => _hasValidData;
 
     private async Task RefreshScheduleAsync(CancellationToken ct)
     {
@@ -155,30 +124,21 @@ public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
 
         try
         {
-            _logger.LogInformation("Loading schedule from {Url}", _loader.JsonUrl);
-
             var schedule = await _loader.LoadAsync(ct);
 
             if (schedule?.Stops is null || schedule.Stops.Count == 0)
-            {
-                throw new InvalidOperationException("Loaded schedule is null or has no stops");
-            }
+                throw new InvalidOperationException("Schedule empty");
 
             _storage.Update(schedule);
-
-            // Атомарное обновление счетчиков
             Interlocked.Exchange(ref _failureCount, 0);
             _lastSuccessfulUpdate = DateTime.UtcNow;
-            _hasValidData = true;
 
-            _logger.LogInformation("Schedule updated successfully. Stops: {StopCount}, Cached trips: {CachedCount}",
-                schedule.Stops.Count, _storage.CachedTripsCount);
+            _logger.LogInformation("Refresh success: {Count} stops", schedule.Stops.Count);
         }
         catch (Exception ex)
         {
             Interlocked.Increment(ref _failureCount);
-            var currentFailures = Interlocked.CompareExchange(ref _failureCount, 0, 0);
-            _logger.LogError(ex, "Failed to update schedule (failure count: {FailureCount})", currentFailures);
+            _logger.LogError(ex, "Refresh failed (failures: {Count})", _failureCount);
             throw;
         }
     }
@@ -190,10 +150,10 @@ public class ScheduleRefreshService : BackgroundService, IAsyncDisposable
         if (failureCount <= 0)
             return TimeSpan.FromHours(_intervalHours);
 
-        var minutes = Math.Min(
-            TimeConstants.BaseRetryDelayMinutes * (1 << (failureCount - 1)),
-            TimeConstants.MaxRetryDelayMinutes);
+        int backoff = failureCount > 30
+            ? TimeConstants.MaxRetryDelayMinutes
+            : Math.Min(TimeConstants.BaseRetryDelayMinutes * (1 << (failureCount - 1)), TimeConstants.MaxRetryDelayMinutes);
 
-        return TimeSpan.FromMinutes(minutes);
+        return TimeSpan.FromMinutes(backoff);
     }
 }

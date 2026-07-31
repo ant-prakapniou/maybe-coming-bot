@@ -20,4 +20,16 @@ public class BotSettings
 
     [Range(1, 24, ErrorMessage = "UserStateTtlHours must be between 1 and 24")]
     public int UserStateTtlHours { get; set; } = 2;
+
+    [Range(1, 20, ErrorMessage = "RateLimitMaxRequests must be between 1 and 20")]
+    public int RateLimitMaxRequests { get; set; } = 5;
+
+    [Range(1, 10, ErrorMessage = "RateLimitWindowMinutes must be between 1 and 10")]
+    public int RateLimitWindowMinutes { get; set; } = 1;
+
+    [Range(1, 5, ErrorMessage = "MaxRetryCount must be between 1 and 5")]
+    public int MaxRetryCount { get; set; } = 3;
+
+    [Range(1, 60, ErrorMessage = "RetryBaseDelaySeconds must be between 1 and 60")]
+    public int RetryBaseDelaySeconds { get; set; } = 2;
 }

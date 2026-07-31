@@ -25,28 +25,23 @@ public class UserStateCleanupService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("User state cleanup service started. TTL: {ExpiryHours} hours",
-            _expiry.TotalHours);
+        _logger.LogInformation("User state cleanup started. TTL: {ExpiryHours}h", _expiry.TotalHours);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken);
-
                 if (stoppingToken.IsCancellationRequested)
                     break;
 
                 var expiredKeys = _userStateService.GetExpiredKeys(_expiry).ToList();
-
                 if (expiredKeys.Count > 0)
                 {
                     foreach (var key in expiredKeys)
-                    {
                         _userStateService.Clear(key);
-                    }
-                    _logger.LogInformation("Cleaned up {Count} expired user states (TTL: {TtlHours}h)",
-                        expiredKeys.Count, _expiry.TotalHours);
+
+                    _logger.LogInformation("Cleaned up {Count} expired user states", expiredKeys.Count);
                 }
             }
             catch (OperationCanceledException)
@@ -59,6 +54,6 @@ public class UserStateCleanupService : BackgroundService
             }
         }
 
-        _logger.LogInformation("User state cleanup service stopped");
+        _logger.LogInformation("User state cleanup stopped");
     }
 }

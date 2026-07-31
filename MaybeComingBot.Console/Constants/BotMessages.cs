@@ -2,48 +2,53 @@
 
 public static class BotMessages
 {
-    public const string Welcome = "🚌 Привет! Я бот для просмотра расписания автобусов.\n\nВыбери остановку:";
-    public const string StopNotFound = "⚠️ Остановка не найдена. Попробуйте /start заново.";
-    public const string NoSchedule = "⚠️ Расписание временно недоступно. Попробуйте позже или выполните /update.";
-    public const string ChooseStopFirst = "Пожалуйста, сначала выберите остановку через /start.";
-    public const string UpdateSuccess = "✅ Расписание успешно обновлено!";
-    public const string UpdateFailed = "Ошибка обновления расписания. Попробуйте позже.";
-    public const string UpdateLoading = "⏳ Загружаю свежее расписание...";
-    public const string NoRights = "⛔ У вас нет прав для обновления расписания.";
-    public const string UnknownCommand = "Неизвестная команда. Используйте /help для справки.";
+    public const string Welcome = "🚌 SELECT STOP.";
+    public const string StopNotFound = "⚠️ STOP NOT FOUND. USE /start.";
+    public const string NoSchedule = "⚠️ SCHEDULE UNAVAILABLE. TRY /update.";
+    public const string ChooseStopFirst = "SELECT STOP VIA /start FIRST.";
+    public const string UpdateSuccess = "✅ SCHEDULE UPDATED.";
+    public const string UpdateFailed = "❌ UPDATE FAILED. RETRY LATER.";
+    public const string UpdateLoading = "⏳ FETCHING SCHEDULE...";
+    public const string NoRights = "⛔ ACCESS DENIED.";
+    public const string UnknownCommand = "UNKNOWN. USE /help.";
+    public const string CancelConfirmed = "✅ ACTION CANCELLED. USE /start.";
+    public const string TooManyRequests = "⛔ SLOW DOWN. RATE LIMIT EXCEEDED.";
 
-    public static string StopSelected(string stopName) => $"✅ Выбрана остановка: *{stopName}*\n\nТеперь используй кнопки ниже:";
-    public static string NoTripsToday(string stopName, DayOfWeek day) => $"Сегодня ({day}) рейсов на остановке \"{stopName}\" нет.";
-    public static string NoTripsTomorrow(DayOfWeek day) => $"Сегодня рейсов больше нет. Завтра ({day}) рейсов тоже нет.";
-    public static string NearestTomorrow(DayOfWeek day, string time) => $"Сегодня рейсов больше нет.\nБлижайший завтра ({day}) в {time}.";
+    public static string StopSelected(string stopName) =>
+        $"✅ STOP SET: *{stopName}*. USE BUTTONS:";
+
+    public static string NoTripsToday(string stopName, DayOfWeek day) =>
+        $"⛔ {stopName}: NO TRIPS ON {day}.";
+
+    public static string NoTripsTomorrow(DayOfWeek day) =>
+        $"⛔ NO MORE TRIPS TODAY. TOMORROW ({day}) ALSO EMPTY.";
+
+    public static string NearestTomorrow(DayOfWeek day, string time) =>
+        $"⛔ NO MORE TRIPS TODAY.\nNEXT: TOMORROW ({day}) AT {time}.";
 
     public static string ReportInstructions(string adminLink) =>
-        $"📨 *Связаться с администратором*\n\n" +
-        $"Если вы нашли ошибку в расписании или у вас есть предложения, " +
-        $"напишите администратору:\n\n" +
-        $"[👤 Написать админу]({adminLink})\n\n" +
-        $"Или отправьте сообщение командой:\n" +
-        $"`/report текст сообщения`\n\n" +
-        $"*Важно:* при отправке сообщения укажите:\n" +
-        $"• Остановку\n" +
-        $"• Время\n" +
-        $"• Что не так";
+        $"📨 *REPORT TO ADMIN*\n\n" +
+        $"FOUND A BUG? WRITE:\n" +
+        $"[👤 CONTACT ADMIN]({adminLink})\n\n" +
+        $"OR USE: `/report YOUR_TEXT`\n\n" +
+        $"*REQUIRED:*\n" +
+        $"• STOP NAME\n" +
+        $"• TIME\n" +
+        $"• ISSUE DESCRIPTION";
 
-    public static string Help()
-    {
-        return "📖 *Доступные команды:*\n\n" +
-               "/start — начать работу и выбрать остановку\n" +
-               "/update — обновить расписание (для всех пользователей)\n" +
-               "/report — сообщить об ошибке администратору\n" +
-               "/status — статус бота (только для админа)\n" +
-               "/cancel — отменить текущее действие\n" +
-               "/help — показать эту справку\n\n" +
-               "После выбора остановки доступны кнопки:\n" +
-               "• *Ближайший* — показать ближайшие рейсы\n" +
-               "• *Сегодня* — все рейсы на сегодня\n" +
-               "• *Неделя* — расписание на неделю\n" +
-               "• *Сменить остановку* — вернуться к выбору\n" +
-               "• *📨 Сообщить об ошибке* — написать администратору\n" +
-               "• *🔙 Назад* — вернуться в главное меню";
-    }
+    public static string Help() =>
+        "📖 *COMMANDS:*\n\n" +
+        "/start — SELECT STOP\n" +
+        "/update — REFRESH (ADMIN ONLY)\n" +
+        "/report — SEND BUG REPORT\n" +
+        "/status — BOT STATUS (ADMIN)\n" +
+        "/cancel — ABORT ACTION\n" +
+        "/help — THIS SCREEN\n\n" +
+        "*BUTTONS:*\n" +
+        "• *Nearest* — NEXT BUS\n" +
+        "• *Today* — FULL DAY\n" +
+        "• *Week* — 7 DAYS\n" +
+        "• *Change stop* — RE-SELECT\n" +
+        "• *📨 Report bug* — TO ADMIN\n" +
+        "• *🔙 Back* — MAIN MENU";
 }

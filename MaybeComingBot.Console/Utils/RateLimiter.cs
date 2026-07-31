@@ -10,7 +10,7 @@ public class RateLimiter : IDisposable
     private readonly ConcurrentDictionary<long, UserRateLimit> _userLimits = new();
     private readonly int _maxRequests;
     private readonly TimeSpan _window;
-    private readonly long _adminUserId;
+    private readonly HashSet<long> _adminUserIds;
     private readonly ILogger<RateLimiter> _logger;
     private readonly Timer _cleanupTimer;
 
@@ -18,9 +18,9 @@ public class RateLimiter : IDisposable
         IOptions<BotSettings> settings,
         ILogger<RateLimiter> logger)
     {
-        _maxRequests = 5;
-        _window = TimeSpan.FromMinutes(1);
-        _adminUserId = settings.Value.AdminUserId;
+        _maxRequests = settings.Value.RateLimitMaxRequests;
+        _window = TimeSpan.FromMinutes(settings.Value.RateLimitWindowMinutes);
+        _adminUserIds = [settings.Value.AdminUserId];
         _logger = logger;
 
         _cleanupTimer = new Timer(CleanupExpiredEntries, null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
@@ -28,12 +28,10 @@ public class RateLimiter : IDisposable
 
     public async Task<bool> IsAllowedAsync(long userId)
     {
-        if (userId == _adminUserId)
+        if (_adminUserIds.Contains(userId))
             return true;
 
         var now = DateTime.UtcNow;
-
-        // Очищаем просроченные записи при обращении
         CleanupSingleUser(userId, now);
 
         var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit());
@@ -48,8 +46,8 @@ public class RateLimiter : IDisposable
 
             if (limit.Count >= _maxRequests)
             {
-                _logger.LogWarning("Rate limit exceeded for user {UserId} (count: {Count})",
-                    userId, limit.Count);
+                _logger.LogWarning("Rate limit exceeded for {UserId} (count: {Count}, window: {Window}m)",
+                    userId, limit.Count, _window.TotalMinutes);
                 return false;
             }
 
@@ -65,9 +63,7 @@ public class RateLimiter : IDisposable
             lock (limit)
             {
                 if (now - limit.WindowStart > TimeSpan.FromMinutes(5))
-                {
                     _userLimits.TryRemove(userId, out _);
-                }
             }
         }
     }
@@ -83,14 +79,10 @@ public class RateLimiter : IDisposable
                 .ToList();
 
             foreach (var key in expiredKeys)
-            {
                 _userLimits.TryRemove(key, out _);
-            }
 
             if (expiredKeys.Count > 0)
-            {
                 _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
-            }
         }
         catch (Exception ex)
         {

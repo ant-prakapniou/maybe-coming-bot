@@ -1,4 +1,5 @@
 ﻿using MaybeComingBot.Constants;
+using System.Text;
 
 namespace MaybeComingBot.Utils;
 
@@ -21,6 +22,8 @@ public static class TimeHelper
 
             if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59)
                 return hours * TimeConstants.MinutesInHour + minutes;
+
+            return null;
         }
 
         return null;
@@ -44,5 +47,35 @@ public static class TimeHelper
         var hours = minutes / TimeConstants.MinutesInHour;
         var mins = minutes % TimeConstants.MinutesInHour;
         return $"{hours:D2}:{mins:D2}";
+    }
+
+    public static string FormatTimeSpan(int totalMinutes)
+    {
+        if (totalMinutes < 0)
+            return "NOW";
+
+        var hours = totalMinutes / 60;
+        var minutes = totalMinutes % 60;
+
+        if (hours == 0)
+            return $"{minutes}m";
+        if (minutes == 0)
+            return $"{hours}h";
+        return $"{hours}h {minutes}m";
+    }
+
+    public static string EscapeMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var sb = new StringBuilder(text.Length * 2);
+        foreach (char c in text)
+        {
+            if ("_*[]()~`>#+-=|{}.!".Contains(c))
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 }
