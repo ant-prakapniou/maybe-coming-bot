@@ -6,32 +6,51 @@ using System.Collections.ObjectModel;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Thread-safe in-memory storage for schedule data.
+/// </summary>
+/// <remarks>
+/// This class manages the schedule data with read-write locks for thread safety.
+/// It provides:
+/// <list type="bullet">
+/// <item><description>Fast lookups by stop ID using a dictionary</description></item>
+/// <item><description>Cached trip lists per day for performance</description></item>
+/// <item><description>Atomic updates with deep cloning to prevent mutation</description></item>
+/// <item><description>Read-write lock for concurrent access</description></item>
+/// </list>
+/// </remarks>
 public class ScheduleStorage : IScheduleStorage, IDisposable
 {
     private ScheduleRoot _data = new() { Stops = [] };
     private Dictionary<string, Stop> _stopDict = new();
-    private Dictionary<string, IReadOnlyList<Trip>> _tripCache = new(); // ✅ Обычный Dictionary
+    private Dictionary<string, IReadOnlyList<Trip>> _tripCache = new();
     private IReadOnlyList<Stop> _cachedStops = Array.Empty<Stop>();
     private bool _isLoaded;
 
     private readonly ILogger<ScheduleStorage> _logger;
     private readonly ReaderWriterLockSlim _rwLock = new();
 
-    // ✅ Константы для пустых коллекций
+    // Empty collection constants for consistent returns
     private static readonly IReadOnlyList<Stop> EmptyStops = Array.Empty<Stop>();
     private static readonly IReadOnlyList<Trip> EmptyTrips = Array.Empty<Trip>();
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ScheduleStorage"/> class.
+    /// </summary>
+    /// <param name="logger">The logger instance for this class.</param>
     public ScheduleStorage(ILogger<ScheduleStorage> logger)
     {
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         _rwLock.Dispose();
         _logger.LogDebug("ScheduleStorage disposed");
     }
 
+    /// <inheritdoc/>
     public IReadOnlyList<Stop> GetAllStops()
     {
         _rwLock.EnterReadLock();
@@ -45,6 +64,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public Stop? GetStop(string id)
     {
         if (string.IsNullOrEmpty(id))
@@ -65,6 +85,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public IReadOnlyList<Trip>? GetTripsForDay(string stopId, int day)
     {
         if (string.IsNullOrWhiteSpace(stopId))
@@ -77,7 +98,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
                 return null;
 
             var key = $"{stopId}_{day}";
-            return _tripCache.TryGetValue(key, out var trips) ? trips : EmptyTrips; // ✅ Возвращаем пустой список
+            return _tripCache.TryGetValue(key, out var trips) ? trips : EmptyTrips;
         }
         finally
         {
@@ -85,6 +106,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public void Update(ScheduleRoot newData)
     {
         if (newData is null)
@@ -99,7 +121,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         try
         {
             _stopDict = newStopDict;
-            _tripCache = newTripCache; // ✅ Теперь обычный Dictionary
+            _tripCache = newTripCache;
             _cachedStops = newCachedStops;
             _data = newData;
             _isLoaded = hasData;
@@ -113,6 +135,11 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
             newCachedStops.Count, newTripCache.Count);
     }
 
+    /// <summary>
+    /// Builds the internal data structures from the raw schedule data.
+    /// </summary>
+    /// <param name="newData">The schedule data to process.</param>
+    /// <returns>A tuple containing all built data structures.</returns>
     private (Dictionary<string, Stop> StopDict, Dictionary<string, IReadOnlyList<Trip>> TripCache, IReadOnlyList<Stop> CachedStops, bool HasData) BuildDataStructures(ScheduleRoot newData)
     {
         if (newData.Stops is null || newData.Stops.Count == 0)
@@ -121,7 +148,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
 
         var stopDict = new Dictionary<string, Stop>(newData.Stops.Count);
-        var tripCache = new Dictionary<string, IReadOnlyList<Trip>>(newData.Stops.Count * 7); // Приблизительно 7 дней
+        var tripCache = new Dictionary<string, IReadOnlyList<Trip>>(newData.Stops.Count * 7); // Approximately 7 days
         var cachedStops = new List<Stop>(newData.Stops.Count);
 
         foreach (var stop in newData.Stops)
@@ -139,7 +166,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
 
             cachedStops.Add(clonedStop);
 
-            // Строим кэш по дням
+            // Build day cache
             if (stop.Schedule is not null)
             {
                 foreach (var daySchedule in stop.Schedule)
@@ -160,7 +187,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
 
                     if (tripsCopy.Count > 0)
                     {
-                        tripCache[key] = tripsCopy.AsReadOnly(); // ✅ Простое присваивание
+                        tripCache[key] = tripsCopy.AsReadOnly();
                     }
                 }
             }
@@ -169,6 +196,11 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         return (stopDict, tripCache, cachedStops.AsReadOnly(), cachedStops.Count > 0);
     }
 
+    /// <summary>
+    /// Creates a deep clone of a Stop object.
+    /// </summary>
+    /// <param name="source">The source stop to clone.</param>
+    /// <returns>A deep cloned Stop instance.</returns>
     private static Stop CloneStop(Stop source)
     {
         var schedule = new List<DaySchedule>(source.Schedule?.Count ?? 0);
@@ -214,6 +246,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         };
     }
 
+    /// <inheritdoc/>
     public bool HasData()
     {
         _rwLock.EnterReadLock();
@@ -227,6 +260,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public int StopCount
     {
         get
@@ -243,6 +277,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public int CachedTripsCount
     {
         get
@@ -259,6 +294,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public bool IsLoaded
     {
         get
@@ -275,6 +311,9 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <summary>
+    /// Clears all schedule data from storage.
+    /// </summary>
     public void Clear()
     {
         _rwLock.EnterWriteLock();

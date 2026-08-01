@@ -6,6 +6,14 @@ using System.Text.Json;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Loads schedule data from a remote JSON endpoint.
+/// </summary>
+/// <remarks>
+/// This class is responsible for fetching and deserializing schedule data
+/// from the configured URL. It includes timeout handling, error logging,
+/// and detailed diagnostics for monitoring performance.
+/// </remarks>
 public class ScheduleLoader
 {
     private readonly IHttpClientFactory _httpClientFactory;
@@ -13,6 +21,9 @@ public class ScheduleLoader
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
     private const string HttpClientName = nameof(ScheduleLoader);
 
+    /// <summary>
+    /// JSON serializer options for schedule deserialization.
+    /// </summary>
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -22,6 +33,11 @@ public class ScheduleLoader
         WriteIndented = false
     };
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ScheduleLoader"/> class.
+    /// </summary>
+    /// <param name="httpClientFactory">The HTTP client factory for creating HTTP clients.</param>
+    /// <param name="logger">The logger instance for this class.</param>
     public ScheduleLoader(
         IHttpClientFactory httpClientFactory,
         ILogger<ScheduleLoader> logger)
@@ -30,6 +46,36 @@ public class ScheduleLoader
         _logger = logger;
     }
 
+    /// <summary>
+    /// Loads schedule data from the configured URL.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token for the operation.</param>
+    /// <returns>
+    /// A <see cref="ScheduleRoot"/> containing the loaded schedule data.
+    /// Never returns null; returns an empty schedule if no data is available.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the BaseAddress is not configured or empty.
+    /// </exception>
+    /// <exception cref="TimeoutException">
+    /// Thrown when the request exceeds the configured timeout.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// The loading process includes:
+    /// <list type="number">
+    /// <item><description>Validating BaseAddress configuration</description></item>
+    /// <item><description>Making an HTTP GET request with timeout</description></item>
+    /// <item><description>Checking for empty responses</description></item>
+    /// <item><description>Deserializing JSON with relaxed options (case-insensitive, trailing commas)</description></item>
+    /// <item><description>Logging performance metrics (duration, size)</description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// All errors are caught and re-thrown with appropriate exception types
+    /// for proper handling by the caller.
+    /// </para>
+    /// </remarks>
     public async Task<ScheduleRoot> LoadAsync(CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -38,7 +84,7 @@ public class ScheduleLoader
         {
             var client = _httpClientFactory.CreateClient(HttpClientName);
 
-            // Проверяем BaseAddress
+            // Validate BaseAddress
             if (client.BaseAddress is null || string.IsNullOrWhiteSpace(client.BaseAddress.ToString()))
             {
                 _logger.LogError("BaseAddress not configured or empty for ScheduleLoader HttpClient");
@@ -49,15 +95,15 @@ public class ScheduleLoader
 
             _logger.LogDebug("Loading schedule from {BaseAddress}", client.BaseAddress);
 
-            // ✅ Добавляем таймаут
+            // Apply timeout
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(_timeout);
 
-            // ✅ Используем GetAsync для лучшего контроля
+            // Use GetAsync for better control
             var response = await client.GetAsync(string.Empty, cts.Token);
             response.EnsureSuccessStatusCode();
 
-            // Проверяем, что ответ не пустой
+            // Check for empty response
             var contentLength = response.Content.Headers.ContentLength;
             if (contentLength.HasValue && contentLength.Value == 0)
             {
@@ -65,7 +111,7 @@ public class ScheduleLoader
                 return new ScheduleRoot { Stops = [] };
             }
 
-            // Читаем и парсим JSON
+            // Read and parse JSON
             var json = await response.Content.ReadAsStringAsync(cts.Token);
 
             if (string.IsNullOrWhiteSpace(json))
@@ -124,7 +170,19 @@ public class ScheduleLoader
         }
     }
 
-    // ✅ Перегрузка для тестирования с пользовательским URL
+    /// <summary>
+    /// Loads schedule data from a specified URL (overload for testing/custom URLs).
+    /// </summary>
+    /// <param name="url">The URL to load schedule data from.</param>
+    /// <param name="cancellationToken">Cancellation token for the operation.</param>
+    /// <returns>
+    /// A <see cref="ScheduleRoot"/> containing the loaded schedule data.
+    /// </returns>
+    /// <remarks>
+    /// This overload allows loading from a custom URL, which is useful for testing
+    /// or when the configured BaseAddress needs to be overridden.
+    /// If the URL is null or empty, the default configured URL is used.
+    /// </remarks>
     public async Task<ScheduleRoot> LoadAsync(string? url, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(url))
@@ -133,8 +191,6 @@ public class ScheduleLoader
         var client = _httpClientFactory.CreateClient(HttpClientName);
         client.BaseAddress = new Uri(url);
 
-        // Сохраняем оригинальный BaseAddress, загружаем, восстанавливаем?
-        // Лучше просто использовать переданный URL напрямую
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(_timeout);
 

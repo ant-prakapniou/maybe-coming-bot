@@ -8,6 +8,19 @@ using Microsoft.Extensions.Options;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Background service that periodically refreshes the schedule data.
+/// </summary>
+/// <remarks>
+/// This service runs as a hosted service and handles:
+/// <list type="bullet">
+/// <item><description>Initial schedule loading at startup</description></item>
+/// <item><description>Periodic refresh at configured intervals</description></item>
+/// <item><description>Exponential backoff with jitter on failures</description></item>
+/// <item><description>Thread-safe refresh operations using a semaphore</description></item>
+/// <item><description>Status reporting for monitoring</description></item>
+/// </list>
+/// </remarks>
 public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
 {
     private const int MaxBackoffFailureCount = 30;
@@ -25,9 +38,19 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
     private DateTime _lastSuccessfulUpdate = DateTime.MinValue;
     private DateTime _lastAttemptTime = DateTime.MinValue;
 
+    /// <inheritdoc/>
     public DateTime LastSuccessfulUpdate => _lastSuccessfulUpdate;
+
+    /// <inheritdoc/>
     public int FailureCount => Interlocked.CompareExchange(ref _failureCount, 0, 0);
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ScheduleRefreshService"/> class.
+    /// </summary>
+    /// <param name="loader">The schedule loader for fetching data.</param>
+    /// <param name="storage">The storage for persisting schedule data.</param>
+    /// <param name="settings">The bot settings containing refresh configuration.</param>
+    /// <param name="logger">The logger instance for this class.</param>
     public ScheduleRefreshService(
         ScheduleLoader loader,
         IScheduleStorage storage,
@@ -42,17 +65,32 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public override void Dispose()
     {
         _refreshLock.Dispose();
         base.Dispose();
     }
 
+    /// <summary>
+    /// Executes the background service logic.
+    /// </summary>
+    /// <param name="stoppingToken">Cancellation token for service shutdown.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// The execution flow:
+    /// <list type="number">
+    /// <item><description>Performs initial schedule load</description></item>
+    /// <item><description>Retries initial load once if it fails</description></item>
+    /// <item><description>If auto-update is disabled, waits indefinitely</description></item>
+    /// <item><description>Main loop: calculates delay, waits, and refreshes</description></item>
+    /// </list>
+    /// </remarks>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Refresh service started");
 
-        // Первичная загрузка
+        // Initial load
         try
         {
             await RefreshScheduleWithLockAsync(stoppingToken);
@@ -63,7 +101,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             throw;
         }
 
-        // Если данные не загружены, пробуем ещё раз с задержкой
+        // Retry initial load if no data
         if (!_storage.HasData() && _intervalHours.HasValue)
         {
             _logger.LogWarning("Initial load failed, retrying in {Delay}s", InitialRetryDelaySeconds);
@@ -91,7 +129,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             throw new InvalidOperationException("Schedule data could not be loaded");
         }
 
-        // Если авто-обновление отключено - ждём бесконечно
+        // If auto-update is disabled, wait indefinitely
         if (!_intervalHours.HasValue)
         {
             _logger.LogInformation("Auto-update disabled, waiting indefinitely");
@@ -101,12 +139,12 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             }
             catch (OperationCanceledException)
             {
-                // Нормальное завершение
+                // Normal shutdown
             }
             return;
         }
 
-        // Основной цикл обновления
+        // Main update loop
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -127,7 +165,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Refresh loop error");
-                // Не вылетаем, продолжаем попытки с задержкой
+                // Continue with delay instead of crashing
                 try
                 {
                     await Task.Delay(TimeSpan.FromMinutes(LoopErrorDelayMinutes), stoppingToken);
@@ -142,11 +180,13 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         _logger.LogInformation("Refresh service stopped");
     }
 
+    /// <inheritdoc/>
     public async Task ForceRefreshAsync(CancellationToken ct = default)
     {
         await RefreshScheduleWithLockAsync(ct);
     }
 
+    /// <inheritdoc/>
     public string GetStatus()
     {
         if (_lastSuccessfulUpdate == DateTime.MinValue)
@@ -166,6 +206,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         return $"✅ LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
     }
 
+    /// <inheritdoc/>
     public string GetLastAttemptInfo()
     {
         if (_lastAttemptTime == DateTime.MinValue)
@@ -178,6 +219,9 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan(ageMinutes)}), FAILS: {failureCount}";
     }
 
+    /// <summary>
+    /// Performs a refresh operation with locking to prevent concurrent execution.
+    /// </summary>
     private async Task RefreshScheduleWithLockAsync(CancellationToken ct)
     {
         await _refreshLock.WaitAsync(ct);
@@ -191,6 +235,9 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         }
     }
 
+    /// <summary>
+    /// Internal refresh logic that loads and updates the schedule.
+    /// </summary>
     private async Task RefreshScheduleInternalAsync(CancellationToken ct)
     {
         _lastAttemptTime = DateTime.UtcNow;
@@ -204,7 +251,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
 
             _storage.Update(schedule);
 
-            // ✅ Атомарный сброс счетчика ошибок
+            // Atomic reset of failure counter
             Interlocked.Exchange(ref _failureCount, 0);
             _lastSuccessfulUpdate = DateTime.UtcNow;
 
@@ -212,13 +259,29 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         }
         catch (Exception ex)
         {
-            // ✅ Атомарное инкрементирование и получение значения
+            // Atomic increment and retrieve
             var failureCount = Interlocked.Increment(ref _failureCount);
             _logger.LogError(ex, "❌ Refresh failed (failures: {Count})", failureCount);
             throw;
         }
     }
 
+    /// <summary>
+    /// Calculates the delay until the next refresh attempt.
+    /// </summary>
+    /// <returns>
+    /// A time span representing the delay.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The delay calculation:
+    /// <list type="bullet">
+    /// <item><description>If no failures: uses the configured interval</description></item>
+    /// <item><description>If failures exist: uses exponential backoff: BaseRetryDelay × 2^(failures - 1)</description></item>
+    /// <item><description>Applies ±10% jitter to prevent thundering herd</description></item>
+    /// </list>
+    /// </para>
+    /// </remarks>
     private TimeSpan CalculateDelay()
     {
         var failureCount = FailureCount;
@@ -226,13 +289,13 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         if (failureCount <= 0)
             return TimeSpan.FromHours(_intervalHours!.Value);
 
-        // Безопасный расчет backoff с ограничением
+        // Safe backoff calculation with limits
         var effectiveFailures = Math.Min(failureCount, MaxBackoffFailureCount);
         var backoffMinutes = Math.Min(
             TimeConstants.BaseRetryDelayMinutes * Math.Pow(2, effectiveFailures - 1),
             TimeConstants.MaxRetryDelayMinutes);
 
-        // ✅ Добавляем джиттер для предотвращения "thundering herd"
+        // Add jitter to prevent thundering herd
         var jitterFactor = 0.9 + (0.2 * _jitter.NextDouble());
         var finalDelay = TimeSpan.FromMinutes(backoffMinutes * jitterFactor);
 

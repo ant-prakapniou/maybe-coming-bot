@@ -6,6 +6,19 @@ using System.Collections.Concurrent;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Manages in-memory user session states with thread-safe operations.
+/// </summary>
+/// <remarks>
+/// This service provides:
+/// <list type="bullet">
+/// <item><description>Thread-safe storage using <see cref="ConcurrentDictionary{TKey,TValue}"/></description></item>
+/// <item><description>User state with TTL (Time-To-Live) expiration</description></item>
+/// <item><description>Selected stop tracking per user</description></item>
+/// <item><description>User information storage (name, username)</description></item>
+/// <item><description>Activity tracking for expiration calculations</description></item>
+/// </list>
+/// </remarks>
 public class UserStateService : IUserStateService
 {
     private readonly ConcurrentDictionary<long, UserState> _states = new();
@@ -13,6 +26,11 @@ public class UserStateService : IUserStateService
     private readonly BotSettings _settings;
     private const int DefaultTtlHours = 24;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="UserStateService"/> class.
+    /// </summary>
+    /// <param name="settings">The bot settings containing TTL configuration.</param>
+    /// <param name="logger">The logger instance for this class.</param>
     public UserStateService(
         IOptions<BotSettings> settings,
         ILogger<UserStateService> logger)
@@ -21,6 +39,7 @@ public class UserStateService : IUserStateService
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public UserState GetOrCreate(long userId)
     {
         if (userId <= 0)
@@ -29,6 +48,7 @@ public class UserStateService : IUserStateService
         return _states.GetOrAdd(userId, _ => CreateUserState());
     }
 
+    /// <inheritdoc/>
     public bool TryGet(long userId, out UserState state)
     {
         if (userId <= 0)
@@ -40,6 +60,7 @@ public class UserStateService : IUserStateService
         return _states.TryGetValue(userId, out state!);
     }
 
+    /// <inheritdoc/>
     public void SetStop(long userId, string stopId)
     {
         if (userId <= 0)
@@ -59,6 +80,7 @@ public class UserStateService : IUserStateService
         _logger.LogDebug("User {UserId} selected stop {StopId}", userId, stopId);
     }
 
+    /// <inheritdoc/>
     public void SetUserInfo(long userId, string firstName, string? lastName, string? username)
     {
         if (userId <= 0)
@@ -75,6 +97,7 @@ public class UserStateService : IUserStateService
             });
     }
 
+    /// <inheritdoc/>
     public void Clear(long userId)
     {
         if (userId <= 0) return;
@@ -83,6 +106,7 @@ public class UserStateService : IUserStateService
             _logger.LogDebug("Cleared state for {UserId}", userId);
     }
 
+    /// <inheritdoc/>
     public void UpdateActivity(long userId)
     {
         if (userId <= 0) return;
@@ -95,6 +119,7 @@ public class UserStateService : IUserStateService
             });
     }
 
+    /// <inheritdoc/>
     public void ClearStop(long userId)
     {
         if (userId <= 0) return;
@@ -107,6 +132,7 @@ public class UserStateService : IUserStateService
         }
     }
 
+    /// <inheritdoc/>
     public bool HasStopSelected(long userId)
     {
         if (userId <= 0) return false;
@@ -115,6 +141,7 @@ public class UserStateService : IUserStateService
                !string.IsNullOrEmpty(state.SelectedStopId);
     }
 
+    /// <inheritdoc/>
     public int GetActiveUsersCount()
     {
         var ttl = TimeSpan.FromHours(_settings.UserStateTtlHours > 0
@@ -125,6 +152,7 @@ public class UserStateService : IUserStateService
         return _states.Values.Count(state => now - state.LastActivity < ttl);
     }
 
+    /// <inheritdoc/>
     public IEnumerable<long> GetExpiredKeys(TimeSpan expiry)
     {
         var now = DateTime.UtcNow;
@@ -135,6 +163,7 @@ public class UserStateService : IUserStateService
             .ToList();
     }
 
+    /// <inheritdoc/>
     public bool IsExpired(long userId)
     {
         if (userId <= 0) return true;
@@ -149,6 +178,15 @@ public class UserStateService : IUserStateService
         return DateTime.UtcNow - state.LastActivity > ttl;
     }
 
+    /// <summary>
+    /// Creates a new user state with optional initial values.
+    /// </summary>
+    /// <param name="firstName">The user's first name.</param>
+    /// <param name="lastName">The user's last name.</param>
+    /// <param name="username">The user's Telegram username.</param>
+    /// <param name="stopId">The selected stop ID.</param>
+    /// <param name="commandCount">The initial command count.</param>
+    /// <returns>A new <see cref="UserState"/> instance.</returns>
     private static UserState CreateUserState(
         string? firstName = null,
         string? lastName = null,

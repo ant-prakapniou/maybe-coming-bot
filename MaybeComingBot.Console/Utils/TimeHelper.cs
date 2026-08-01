@@ -5,8 +5,13 @@ using System.Text;
 namespace MaybeComingBot.Utils;
 
 /// <summary>
-/// Helper class for time-related operations
+/// Provides helper methods for time-related operations including parsing,
+/// formatting, validation, and Markdown escaping.
 /// </summary>
+/// <remarks>
+/// This class centralizes all time manipulation logic used throughout the application.
+/// It includes caching for parsed time values to improve performance.
+/// </remarks>
 public static class TimeHelper
 {
     private static readonly HashSet<char> MarkdownSpecialChars = new()
@@ -21,10 +26,20 @@ public static class TimeHelper
     private const int MinutesInDay = 1440;
 
     /// <summary>
-    /// Converts time string (HH:mm) to minutes
+    /// Converts a time string (HH:mm) to minutes since midnight.
     /// </summary>
-    /// <param name="time">Time in HH:mm format</param>
-    /// <returns>Minutes or null if invalid</returns>
+    /// <param name="time">Time in HH:mm format. Can be "H:mm" or "24:00" for end of day.</param>
+    /// <returns>Minutes since midnight, or null if the format is invalid.</returns>
+    /// <remarks>
+    /// The method handles the following formats:
+    /// <list type="bullet">
+    /// <item><description>"HH:mm" — standard 24-hour format (e.g., "14:30")</description></item>
+    /// <item><description>"H:mm" — hour without leading zero (e.g., "9:00")</description></item>
+    /// <item><description>"24:00" — special case representing the end of the day (1440 minutes)</description></item>
+    /// <item><description>"HH:mm:ss" — with seconds (seconds are ignored)</description></item>
+    /// </list>
+    /// Results are cached for performance using a concurrent dictionary.
+    /// </remarks>
     public static int? ToMinutes(string time)
     {
         if (string.IsNullOrWhiteSpace(time))
@@ -42,11 +57,11 @@ public static class TimeHelper
             if (!int.TryParse(parts[1], out int minutes))
                 return null;
 
-            // Специальный случай: 24:00 - конец дня
+            // Special case: 24:00 represents the end of the day
             if (hours == 24 && minutes == 0)
                 return TimeConstants.MaxMinutesInDay;
 
-            // Проверка валидности
+            // Validate time range
             if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59)
                 return hours * TimeConstants.MinutesInHour + minutes;
 
@@ -55,22 +70,22 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Converts time string to minutes with default value
+    /// Converts a time string to minutes since midnight with a default fallback value.
     /// </summary>
-    /// <param name="time">Time in HH:mm format</param>
-    /// <param name="defaultValue">Default value if parsing fails</param>
-    /// <returns>Minutes or default value</returns>
+    /// <param name="time">Time in HH:mm format.</param>
+    /// <param name="defaultValue">Default value to return if parsing fails.</param>
+    /// <returns>Minutes since midnight, or <paramref name="defaultValue"/> if invalid.</returns>
     public static int ToMinutesSafe(string time, int defaultValue = DefaultMinutes)
     {
         return ToMinutes(time) ?? defaultValue;
     }
 
     /// <summary>
-    /// Tries to parse time string to minutes
+    /// Attempts to parse a time string to minutes since midnight.
     /// </summary>
-    /// <param name="time">Time in HH:mm format</param>
-    /// <param name="minutes">Parsed minutes</param>
-    /// <returns>True if parsing succeeded</returns>
+    /// <param name="time">Time in HH:mm format.</param>
+    /// <param name="minutes">When this method returns, contains the parsed minutes if successful; otherwise, 0.</param>
+    /// <returns><c>true</c> if parsing succeeded; otherwise, <c>false</c>.</returns>
     public static bool TryParseMinutes(string time, out int minutes)
     {
         var result = ToMinutes(time);
@@ -84,20 +99,20 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Checks if time string is valid
+    /// Checks whether a time string is valid.
     /// </summary>
-    /// <param name="time">Time in HH:mm format</param>
-    /// <returns>True if valid</returns>
+    /// <param name="time">Time in HH:mm format.</param>
+    /// <returns><c>true</c> if the time format is valid; otherwise, <c>false</c>.</returns>
     public static bool IsValidTime(string time)
     {
         return ToMinutes(time).HasValue;
     }
 
     /// <summary>
-    /// Formats minutes to time string (HH:mm)
+    /// Formats minutes since midnight to a time string (HH:mm).
     /// </summary>
-    /// <param name="minutes">Minutes since midnight</param>
-    /// <returns>Formatted time string</returns>
+    /// <param name="minutes">Minutes since midnight (0-1440).</param>
+    /// <returns>Formatted time string (e.g., "14:30" or "24:00").</returns>
     public static string FormatMinutes(int minutes)
     {
         if (minutes >= TimeConstants.MaxMinutesInDay)
@@ -109,16 +124,15 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Formats time span in human-readable format
+    /// Formats a time span in minutes to a human-readable string.
     /// </summary>
-    /// <param name="totalMinutes">Total minutes</param>
-    /// <returns>Human-readable time span</returns>
+    /// <param name="totalMinutes">Total minutes to format.</param>
+    /// <returns>
+    /// A human-readable string like "2d 3h 15m", "NOW" for 0 or negative values.
+    /// </returns>
     public static string FormatTimeSpan(int totalMinutes)
     {
-        if (totalMinutes < 0)
-            return "NOW";
-
-        if (totalMinutes == 0)
+        if (totalMinutes <= 0)
             return "NOW";
 
         var days = totalMinutes / TimeConstants.MinutesInDay;
@@ -135,10 +149,17 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Escapes special Markdown characters
+    /// Escapes special Markdown characters in a text string.
     /// </summary>
-    /// <param name="text">Text to escape</param>
-    /// <returns>Escaped text</returns>
+    /// <param name="text">The text to escape.</param>
+    /// <returns>
+    /// The escaped text with backslashes before special characters.
+    /// Returns an empty string if the input is null.
+    /// </returns>
+    /// <remarks>
+    /// Escapes the following characters: _ * [ ] ( ) ~ ` > # + - = | { } . ! \ /
+    /// This is necessary for safe display of user-provided text in Markdown messages.
+    /// </remarks>
     public static string EscapeMarkdown(string text)
     {
         if (string.IsNullOrEmpty(text))
@@ -155,12 +176,14 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Checks if time is within range
+    /// Checks if a time falls within a specified range.
     /// </summary>
-    /// <param name="time">Time to check</param>
-    /// <param name="start">Range start</param>
-    /// <param name="end">Range end</param>
-    /// <returns>True if time is in range</returns>
+    /// <param name="time">The time to check in HH:mm format.</param>
+    /// <param name="start">The range start in HH:mm format.</param>
+    /// <param name="end">The range end in HH:mm format.</param>
+    /// <returns>
+    /// <c>true</c> if the time is within the inclusive range; otherwise, <c>false</c>.
+    /// </returns>
     public static bool IsTimeInRange(string time, string start, string end)
     {
         var t = ToMinutes(time);
@@ -174,11 +197,14 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Calculates difference between two times
+    /// Calculates the difference in minutes between two times.
     /// </summary>
-    /// <param name="from">Start time</param>
-    /// <param name="to">End time</param>
-    /// <returns>Difference in minutes</returns>
+    /// <param name="from">The start time in HH:mm format.</param>
+    /// <param name="to">The end time in HH:mm format.</param>
+    /// <returns>
+    /// The difference in minutes. If the end time is earlier than the start time,
+    /// the calculation wraps around to the next day.
+    /// </returns>
     public static int GetTimeDifference(string from, string to)
     {
         var fromMinutes = ToMinutes(from);
@@ -193,8 +219,12 @@ public static class TimeHelper
     }
 
     /// <summary>
-    /// Clears the cache (useful for testing)
+    /// Clears the internal cache used for time parsing.
     /// </summary>
+    /// <remarks>
+    /// This method is primarily useful for testing scenarios where cache consistency
+    /// needs to be controlled. In normal operation, the cache should not need clearing.
+    /// </remarks>
     public static void ClearCache()
     {
         _cache.Clear();

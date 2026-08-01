@@ -7,6 +7,14 @@ using System.Text;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Formats schedule data into user-friendly text messages for display.
+/// </summary>
+/// <remarks>
+/// This class provides methods for formatting schedule information in various
+/// formats: nearest trip, today's full schedule, and weekly overview.
+/// All outputs are formatted with Markdown for rich display in Telegram.
+/// </remarks>
 public class ScheduleFormatter(
     IScheduleStorage storage,
     ILogger<ScheduleFormatter> logger)
@@ -14,6 +22,20 @@ public class ScheduleFormatter(
     private readonly IScheduleStorage _storage = storage;
     private readonly ILogger<ScheduleFormatter> _logger = logger;
 
+    /// <summary>
+    /// Formats the nearest upcoming trip for a given stop.
+    /// </summary>
+    /// <param name="stop">The stop to get the nearest trip for.</param>
+    /// <returns>A formatted message showing the next trip with waiting time.</returns>
+    /// <remarks>
+    /// The logic:
+    /// <list type="number">
+    /// <item><description>Gets today's trips sorted by time</description></item>
+    /// <item><description>Finds the next trip after current time</description></item>
+    /// <item><description>If no more trips today, searches the next 7 days</description></item>
+    /// <item><description>Shows the trip time and waiting duration</description></item>
+    /// </list>
+    /// </remarks>
     public string FormatNearest(Stop stop)
     {
         var now = DateTime.Now;
@@ -25,7 +47,7 @@ public class ScheduleFormatter(
 
         if (sortedTrips.Count == 0)
         {
-            // Ищем в следующие дни
+            // Search in the following days
             var nextDayTrip = FindNextDayTrip(stop, day);
             if (nextDayTrip == null)
             {
@@ -35,7 +57,7 @@ public class ScheduleFormatter(
             return FormatFutureDayTrip(stop, nextDayTrip.Value.Day, nextDayTrip.Value.Trip);
         }
 
-        // Ищем следующий рейс сегодня
+        // Find the next trip today
         var nextIndex = sortedTrips.FindIndex(x => x.Minutes >= nowMinutes);
 
         if (nextIndex >= 0)
@@ -43,7 +65,7 @@ public class ScheduleFormatter(
             return FormatNextTrip(stop, sortedTrips, nextIndex, nowMinutes);
         }
 
-        // Если сегодня нет рейсов после текущего времени, ищем в следующие дни
+        // No more trips today, search following days
         var nextDayTripAfter = FindNextDayTrip(stop, day);
         if (nextDayTripAfter == null)
         {
@@ -54,6 +76,19 @@ public class ScheduleFormatter(
         return FormatFutureDayTrip(stop, nextDayTripAfter.Value.Day, nextDayTripAfter.Value.Trip);
     }
 
+    /// <summary>
+    /// Formats the full schedule for today at a given stop.
+    /// </summary>
+    /// <param name="stop">The stop to format the schedule for.</param>
+    /// <returns>A formatted message showing all trips for today with status indicators.</returns>
+    /// <remarks>
+    /// Each trip is marked with:
+    /// <list type="bullet">
+    /// <item><description>✅ (PASSED) - trips that have already occurred</description></item>
+    /// <item><description>🔴 NOW - the current trip at this exact minute</description></item>
+    /// <item><description>⬜ - upcoming trips</description></item>
+    /// </list>
+    /// </remarks>
     public string FormatToday(Stop stop)
     {
         var now = DateTime.Now;
@@ -89,6 +124,11 @@ public class ScheduleFormatter(
         return response.ToString();
     }
 
+    /// <summary>
+    /// Formats the full weekly schedule for a given stop.
+    /// </summary>
+    /// <param name="stop">The stop to format the weekly schedule for.</param>
+    /// <returns>A formatted message showing all trips for each day of the week.</returns>
     public string FormatWeek(Stop stop)
     {
         var response = new StringBuilder();
@@ -114,7 +154,7 @@ public class ScheduleFormatter(
                 response.AppendLine(times);
             }
 
-            // Добавляем разделитель между днями
+            // Add separator between days
             if (day < 6)
                 response.AppendLine("━━━━━━━━━━━━━━━━━━━");
         }
@@ -122,8 +162,11 @@ public class ScheduleFormatter(
         return response.ToString();
     }
 
-    // Вспомогательные методы
-
+    /// <summary>
+    /// Sorts and converts trips to a list with minutes since midnight.
+    /// </summary>
+    /// <param name="trips">The trips to process.</param>
+    /// <returns>A sorted list of trips with their minutes since midnight.</returns>
     private static List<(Trip Trip, int Minutes)> GetSortedTrips(IReadOnlyList<Trip>? trips)
     {
         if (trips == null || trips.Count == 0)
@@ -138,6 +181,9 @@ public class ScheduleFormatter(
             .ToList();
     }
 
+    /// <summary>
+    /// Formats the next trip with waiting time and following trip.
+    /// </summary>
     private string FormatNextTrip(Stop stop, List<(Trip Trip, int Minutes)> sortedTrips, int index, int nowMinutes)
     {
         var nearest = sortedTrips[index];
@@ -153,7 +199,7 @@ public class ScheduleFormatter(
         response.AppendLine($"\n⏱ *IN {TimeHelper.FormatTimeSpan(wait)}*");
         response.AppendLine();
 
-        // Следующий рейс
+        // Following trip
         var nextIndex = index + 1;
         if (nextIndex < sortedTrips.Count)
         {
@@ -174,6 +220,12 @@ public class ScheduleFormatter(
         return response.ToString();
     }
 
+    /// <summary>
+    /// Finds the first trip in the following days.
+    /// </summary>
+    /// <param name="stop">The stop to search.</param>
+    /// <param name="startDay">The starting day index (0-6).</param>
+    /// <returns>A tuple with the day and trip, or null if none found.</returns>
     private (DayOfWeek Day, Trip Trip)? FindNextDayTrip(Stop stop, int startDay)
     {
         for (int offset = 1; offset < 7; offset++)
@@ -190,6 +242,9 @@ public class ScheduleFormatter(
         return null;
     }
 
+    /// <summary>
+    /// Formats a trip on a future day.
+    /// </summary>
     private string FormatFutureDayTrip(Stop stop, DayOfWeek day, Trip trip)
     {
         var response = new StringBuilder();

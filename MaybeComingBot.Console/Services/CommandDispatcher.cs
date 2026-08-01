@@ -11,6 +11,18 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 namespace MaybeComingBot.Services;
 
+/// <summary>
+/// Dispatches commands and callback queries to appropriate handlers.
+/// </summary>
+/// <remarks>
+/// This class is responsible for routing user interactions to the correct handlers:
+/// <list type="bullet">
+/// <item><description>Slash commands (/start, /help, /report, etc.)</description></item>
+/// <item><description>Reply keyboard button commands (Nearest, Today, Week, etc.)</description></item>
+/// <item><description>Inline callback queries (stop selection, admin refresh)</description></item>
+/// </list>
+/// It also manages admin-only commands and report forwarding to administrators.
+/// </remarks>
 public class CommandDispatcher(
     ITelegramBotClient botClient,
     IScheduleStorage storage,
@@ -32,6 +44,9 @@ public class CommandDispatcher(
     private readonly HashSet<long> _adminUserIds = new(settings?.Value?.AdminUserIds ?? Array.Empty<long>());
     private readonly ILogger<CommandDispatcher> _logger = logger;
 
+    /// <summary>
+    /// Main keyboard displayed after stop selection.
+    /// </summary>
     private static readonly ReplyKeyboardMarkup MainKeyboard = new(new[]
     {
         new KeyboardButton[] { BotCommands.Nearest, BotCommands.Today },
@@ -40,8 +55,30 @@ public class CommandDispatcher(
     })
     { ResizeKeyboard = true };
 
+    /// <summary>
+    /// Checks if a user is an administrator.
+    /// </summary>
+    /// <param name="userId">The Telegram user ID to check.</param>
+    /// <returns><c>true</c> if the user is an admin; otherwise, <c>false</c>.</returns>
     private bool IsAdmin(long userId) => userId > 0 && _adminUserIds.Contains(userId);
 
+    /// <summary>
+    /// Dispatches a command from a user message.
+    /// </summary>
+    /// <param name="chatId">The Telegram chat ID.</param>
+    /// <param name="userId">The Telegram user ID.</param>
+    /// <param name="command">The command string (e.g., "/start", "Nearest").</param>
+    /// <param name="args">Optional command arguments.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// Command flow:
+    /// <list type="number">
+    /// <item><description>Handles cancel, start, help, admin commands</description></item>
+    /// <item><description>Checks if user has a stop selected (except for special commands)</description></item>
+    /// <item><description>Routes to appropriate formatter method</description></item>
+    /// <item><description>Unknown commands show help prompt</description></item>
+    /// </list>
+    /// </remarks>
     public async Task DispatchCommandAsync(long chatId, long userId, string command, string? args)
     {
         if (chatId <= 0 || userId <= 0)
@@ -114,6 +151,21 @@ public class CommandDispatcher(
         }
     }
 
+    /// <summary>
+    /// Handles inline callback queries from inline keyboards.
+    /// </summary>
+    /// <param name="callbackQuery">The callback query from Telegram.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    /// <remarks>
+    /// Callback flow:
+    /// <list type="number">
+    /// <item><description>Validates callback data and user session</description></item>
+    /// <item><description>Answers callback to remove loading indicator</description></item>
+    /// <item><description>Handles admin refresh callback</description></item>
+    /// <item><description>Parses stop ID and updates user selection</description></item>
+    /// <item><description>Shows main keyboard after stop selection</description></item>
+    /// </list>
+    /// </remarks>
     public async Task HandleCallbackAsync(CallbackQuery callbackQuery)
     {
         if (callbackQuery is null || string.IsNullOrEmpty(callbackQuery.Data))
@@ -142,24 +194,24 @@ public class CommandDispatcher(
         var chatId = message.Chat.Id;
         var data = callbackQuery.Data;
 
-        // Отвечаем на callback (убираем "часики")
+        // Answer callback to remove "loading" indicator
         await _botClient.AnswerCallbackQuery(callbackQuery.Id);
 
-        // Проверяем сессию
+        // Check session
         if (!_userStateService.TryGet(userId, out _))
         {
             await _sender.SendAsync(chatId, "⛔ SESSION EXPIRED. USE /start.");
             return;
         }
 
-        // Обработка системных callback
+        // Handle system callbacks
         if (data == BotCommands.AdminRefresh)
         {
             await HandleAdminRefreshAsync(chatId, userId);
             return;
         }
 
-        // Парсинг stopId
+        // Parse stop ID
         var parts = data.Split('|', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0)
         {
@@ -186,6 +238,9 @@ public class CommandDispatcher(
             replyMarkup: MainKeyboard);
     }
 
+    /// <summary>
+    /// Handles the /start command by displaying stop selection keyboard.
+    /// </summary>
     private async Task HandleStartAsync(long chatId, long userId)
     {
         var allStops = _storage.GetAllStops().ToList();
@@ -212,6 +267,9 @@ public class CommandDispatcher(
         await _sender.SendAsync(chatId, BotMessages.Welcome, replyMarkup: stopKeyboard);
     }
 
+    /// <summary>
+    /// Handles admin refresh command (/update or callback).
+    /// </summary>
     private async Task HandleAdminRefreshAsync(long chatId, long userId)
     {
         if (!IsAdmin(userId))
@@ -244,6 +302,9 @@ public class CommandDispatcher(
         }
     }
 
+    /// <summary>
+    /// Handles admin status command (/status).
+    /// </summary>
     private async Task HandleStatusAsync(long chatId, long userId)
     {
         if (!IsAdmin(userId))
@@ -261,6 +322,9 @@ public class CommandDispatcher(
         await _sender.SendAsync(chatId, msg, ParseMode.Markdown);
     }
 
+    /// <summary>
+    /// Handles user report submission (/report).
+    /// </summary>
     private async Task HandleReportAsync(long chatId, long userId, string? reportText)
     {
         if (string.IsNullOrWhiteSpace(reportText))
@@ -302,6 +366,9 @@ public class CommandDispatcher(
         }
     }
 
+    /// <summary>
+    /// Shows report instructions to the user.
+    /// </summary>
     private async Task ShowReportInstructionsAsync(long chatId)
     {
         if (_adminUserIds.Count == 0)
@@ -317,6 +384,11 @@ public class CommandDispatcher(
             ParseMode.Markdown);
     }
 
+    /// <summary>
+    /// Creates an inline keyboard with stop selection buttons.
+    /// </summary>
+    /// <param name="stops">The collection of stops to display.</param>
+    /// <returns>An inline keyboard markup with stop buttons.</returns>
     private static InlineKeyboardMarkup CreateStopKeyboard(IEnumerable<Stop> stops)
     {
         return new InlineKeyboardMarkup(
