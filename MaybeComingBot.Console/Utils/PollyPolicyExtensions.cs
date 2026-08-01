@@ -27,29 +27,36 @@ public static class PollyPolicyExtensions
             .WaitAndRetryAsync(
                 maxRetries,
                 retryAttempt => TimeSpan.FromSeconds(
-                    baseDelaySeconds * Math.Pow(2, retryAttempt - 1)), // Экспоненциальный backoff: 2, 4, 8, 16...
+                    baseDelaySeconds * Math.Pow(2, retryAttempt - 1)), // 2, 4, 8, 16...
                 onRetry: (outcome, timespan, retryCount, context) =>
                 {
                     var logger = context.GetLoggerOrDefault();
                     var url = outcome.Result?.RequestMessage?.RequestUri?.ToString() ?? "unknown";
+                    var statusCode = outcome.Result?.StatusCode.ToString() ?? "UNKNOWN";
 
-                    if (retryCount == maxRetries)
+                    // Логируем только если это не последняя попытка
+                    if (retryCount < maxRetries)
                     {
-                        logger?.LogError("All {Max} retries failed for {Url}", maxRetries, url);
+                        logger?.LogWarning(
+                            "Retry {Retry}/{Max} in {Delay:F1}s for {Url} (Status: {StatusCode})",
+                            retryCount, maxRetries, timespan.TotalSeconds, url, statusCode);
                     }
                     else
                     {
-                        logger?.LogWarning("Retry {Retry}/{Max} after {Delay}s for {Url}",
-                            retryCount, maxRetries, timespan.TotalSeconds, url);
+                        // Последняя попытка - логируем как ошибку с деталями
+                        logger?.LogError(
+                            "All {Max} retries failed for {Url}. Last status: {StatusCode}",
+                            maxRetries, url, statusCode);
                     }
                 });
     }
 
     public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
     {
+        // Pessimistic более надёжен для HTTP запросов
         return Policy.TimeoutAsync<HttpResponseMessage>(
             TimeSpan.FromSeconds(30),
-            TimeoutStrategy.Optimistic);
+            TimeoutStrategy.Pessimistic);
     }
 
     private static ILogger? GetLoggerOrDefault(this Context context)

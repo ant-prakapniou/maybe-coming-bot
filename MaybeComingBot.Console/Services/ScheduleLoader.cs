@@ -13,6 +13,7 @@ public class ScheduleLoader
     {
         PropertyNameCaseInsensitive = true,
         AllowTrailingCommas = true,
+        ReadCommentHandling = JsonCommentHandling.Skip, // Поддержка комментариев
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
@@ -31,8 +32,17 @@ public class ScheduleLoader
         {
             var client = _httpClientFactory.CreateClient(nameof(ScheduleLoader));
 
+            // Проверяем, что BaseAddress задан
+            if (client.BaseAddress is null)
+            {
+                _logger.LogError("BaseAddress not configured for ScheduleLoader HttpClient");
+                throw new InvalidOperationException("ScheduleLoader HttpClient BaseAddress is not configured");
+            }
+
+            _logger.LogDebug("Loading schedule from {BaseAddress}", client.BaseAddress);
+
             var schedule = await client.GetFromJsonAsync<ScheduleRoot>(
-                string.Empty, // URL уже задан в HttpClient при регистрации
+                string.Empty,
                 _jsonOptions,
                 cancellationToken);
 
@@ -52,12 +62,13 @@ public class ScheduleLoader
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "HTTP request failed");
+            _logger.LogError(ex, "HTTP request failed. StatusCode: {StatusCode}, Message: {Message}",
+                ex.StatusCode, ex.Message);
             throw;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            _logger.LogWarning("Schedule load cancelled");
+            _logger.LogWarning("Schedule load cancelled: {Message}", ex.Message);
             throw;
         }
         catch (Exception ex)

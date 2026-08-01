@@ -4,7 +4,7 @@ namespace MaybeComingBot.Abstractions;
 
 public interface IScheduleStorage
 {
-    IEnumerable<Stop> GetAllStops();
+    IReadOnlyList<Stop> GetAllStops();
     Stop? GetStop(string id);
     IReadOnlyList<Trip>? GetTripsForDay(string stopId, int day);
     void Update(ScheduleRoot newData);

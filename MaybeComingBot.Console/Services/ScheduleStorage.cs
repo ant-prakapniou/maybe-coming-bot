@@ -2,44 +2,84 @@
 using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 
 namespace MaybeComingBot.Services;
 
-public class ScheduleStorage : IScheduleStorage
+public class ScheduleStorage : IScheduleStorage, IDisposable
 {
     private ScheduleRoot _data = new() { Stops = [] };
-    private volatile Dictionary<string, Stop> _stopDict = new();
-    private volatile ConcurrentDictionary<string, IReadOnlyList<Trip>> _tripCache = new();
-    private volatile List<Stop> _cachedStops = [];
-    private volatile bool _isLoaded;
+    private Dictionary<string, Stop> _stopDict = new();
+    private ConcurrentDictionary<string, IReadOnlyList<Trip>> _tripCache = new();
+    private IReadOnlyList<Stop> _cachedStops = Array.Empty<Stop>();
+    private bool _isLoaded;
 
     private readonly ILogger<ScheduleStorage> _logger;
-    private readonly SemaphoreSlim _updateLock = new(1, 1);
+    private readonly ReaderWriterLockSlim _rwLock = new();
 
     public ScheduleStorage(ILogger<ScheduleStorage> logger)
     {
         _logger = logger;
     }
 
-    public IEnumerable<Stop> GetAllStops() => _isLoaded ? _cachedStops : [];
+    public void Dispose()
+    {
+        _rwLock.Dispose();
+        _logger.LogDebug("ScheduleStorage disposed");
+    }
+
+    public IReadOnlyList<Stop> GetAllStops()
+    {
+        _rwLock.EnterReadLock();
+        try
+        {
+            return _isLoaded ? _cachedStops : Array.Empty<Stop>();
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
 
     public Stop? GetStop(string id)
     {
-        if (string.IsNullOrEmpty(id) || !_isLoaded)
+        if (string.IsNullOrEmpty(id))
             return null;
 
-        _stopDict.TryGetValue(id, out var stop);
-        return stop;
+        _rwLock.EnterReadLock();
+        try
+        {
+            if (!_isLoaded)
+                return null;
+
+            _stopDict.TryGetValue(id, out var stop);
+            return stop;
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     public IReadOnlyList<Trip>? GetTripsForDay(string stopId, int day)
     {
-        if (string.IsNullOrWhiteSpace(stopId) || !_isLoaded)
+        if (string.IsNullOrWhiteSpace(stopId))
             return null;
 
-        var key = $"{stopId}_{day}";
-        _tripCache.TryGetValue(key, out var trips);
-        return trips;
+        _rwLock.EnterReadLock();
+        try
+        {
+            if (!_isLoaded)
+                return null;
+
+            var key = $"{stopId}_{day}";
+            _tripCache.TryGetValue(key, out var trips);
+            return trips;
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     public void Update(ScheduleRoot newData)
@@ -53,8 +93,8 @@ public class ScheduleStorage : IScheduleStorage
         // Строим новые структуры ДО блокировки
         var (newStopDict, newTripCache, newCachedStops, hasData) = BuildDataStructures(newData);
 
-        // Блокируем ТОЛЬКО на время замены ссылок (микросекунды)
-        _updateLock.Wait();
+        // Блокируем на время замены
+        _rwLock.EnterWriteLock();
         try
         {
             _stopDict = newStopDict;
@@ -65,18 +105,18 @@ public class ScheduleStorage : IScheduleStorage
         }
         finally
         {
-            _updateLock.Release();
+            _rwLock.ExitWriteLock();
         }
 
         _logger.LogDebug("Updated: {Stops} stops, {Trips} trip caches",
             newCachedStops.Count, newTripCache.Count);
     }
 
-    private (Dictionary<string, Stop> StopDict, ConcurrentDictionary<string, IReadOnlyList<Trip>> TripCache, List<Stop> CachedStops, bool HasData) BuildDataStructures(ScheduleRoot newData)
+    private (Dictionary<string, Stop> StopDict, ConcurrentDictionary<string, IReadOnlyList<Trip>> TripCache, IReadOnlyList<Stop> CachedStops, bool HasData) BuildDataStructures(ScheduleRoot newData)
     {
         if (newData.Stops is null || newData.Stops.Count == 0)
         {
-            return (new Dictionary<string, Stop>(), new ConcurrentDictionary<string, IReadOnlyList<Trip>>(), [], false);
+            return (new Dictionary<string, Stop>(), new ConcurrentDictionary<string, IReadOnlyList<Trip>>(), Array.Empty<Stop>(), false);
         }
 
         var stopDict = new Dictionary<string, Stop>(newData.Stops.Count);
@@ -126,7 +166,7 @@ public class ScheduleStorage : IScheduleStorage
             }
         }
 
-        return (stopDict, tripCache, cachedStops, cachedStops.Count > 0);
+        return (stopDict, tripCache, cachedStops.AsReadOnly(), cachedStops.Count > 0);
     }
 
     private static Stop CloneStop(Stop source)
@@ -174,8 +214,64 @@ public class ScheduleStorage : IScheduleStorage
         return cloned;
     }
 
-    public bool HasData() => _isLoaded;
-    public int StopCount => _cachedStops?.Count ?? 0;
-    public int CachedTripsCount => _tripCache?.Count ?? 0;
-    public bool IsLoaded => _isLoaded;
+    public bool HasData()
+    {
+        _rwLock.EnterReadLock();
+        try
+        {
+            return _isLoaded;
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
+
+    public int StopCount
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _cachedStops?.Count ?? 0;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
+
+    public int CachedTripsCount
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _tripCache?.Count ?? 0;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
+
+    public bool IsLoaded
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _isLoaded;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
 }

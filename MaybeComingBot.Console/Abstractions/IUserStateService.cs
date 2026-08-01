@@ -13,4 +13,5 @@ public interface IUserStateService
     IEnumerable<long> GetExpiredKeys(TimeSpan expiry);
     bool HasStopSelected(long userId);
     int GetActiveUsersCount();
+    void ClearStop(long userId);
 }

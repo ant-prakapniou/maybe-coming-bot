@@ -28,7 +28,7 @@ try
     // ============================================================
     // 2. ПОСТРОЕНИЕ ХОСТА - используем метод расширения
     // ============================================================
-    var host = Host.CreateDefaultBuilder(args)
+    using var host = Host.CreateDefaultBuilder(args)
         .UseSerilog()
         .ConfigureServices((context, services) =>
         {
@@ -98,6 +98,7 @@ static async Task RunBotWithRestartAsync(IHost host)
     var logger = host.Services.GetRequiredService<ILogger<Program>>();
     var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
     var handler = host.Services.GetRequiredService<BotHandler>();
+    var lifetime = host.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
 
     var receiverOptions = new ReceiverOptions
     {
@@ -108,15 +109,23 @@ static async Task RunBotWithRestartAsync(IHost host)
     logger.LogInformation("🤖 Bot live: @{Username}", me.Username);
     logger.LogInformation("🔄 Press Ctrl+C to stop.");
 
-    using var cts = new CancellationTokenSource();
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(
+        lifetime.ApplicationStopping,
+        CancellationToken.None
+    );
+
+    // Регистрируем отмену через Ctrl+C
     Console.CancelKeyPress += (s, e) =>
     {
-        e.Cancel = true;
+        // Убираем e.Cancel = true, чтобы не блокировать завершение
         logger.LogInformation("Shutdown requested...");
         cts.Cancel();
     };
 
-    while (!cts.Token.IsCancellationRequested)
+    int restartAttempts = 0;
+    const int maxRestartAttempts = 5;
+
+    while (!cts.Token.IsCancellationRequested && restartAttempts < maxRestartAttempts)
     {
         try
         {
@@ -143,6 +152,9 @@ static async Task RunBotWithRestartAsync(IHost host)
                 receiverOptions,
                 cancellationToken: cts.Token
             );
+
+            // Если ReceiveAsync завершился без исключения (нормально), сбрасываем счётчик
+            restartAttempts = 0;
         }
         catch (OperationCanceledException)
         {
@@ -151,8 +163,22 @@ static async Task RunBotWithRestartAsync(IHost host)
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Bot crashed. Restarting in 10 seconds...");
-            await Task.Delay(TimeSpan.FromSeconds(10), cts.Token);
+            restartAttempts++;
+            logger.LogError(ex, "Bot crashed (attempt {Attempt}/{MaxAttempts}). Restarting in {Delay} seconds...",
+                restartAttempts, maxRestartAttempts, 10 * restartAttempts);
+
+            if (restartAttempts >= maxRestartAttempts)
+            {
+                logger.LogCritical("❌ Maximum restart attempts reached. Bot will not restart.");
+                throw; // Пробрасываем исключение дальше, чтобы остановить хост
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(10 * restartAttempts), cts.Token);
         }
+    }
+
+    if (restartAttempts >= maxRestartAttempts)
+    {
+        throw new InvalidOperationException($"Bot stopped after {maxRestartAttempts} failed restart attempts.");
     }
 }

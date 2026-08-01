@@ -29,10 +29,17 @@ public class CommandDispatcher(
     private readonly ScheduleFormatter _formatter = formatter;
     private readonly StopSelectionGuard _guard = guard;
     private readonly TelegramSender _sender = sender;
-    private readonly long[] _adminUserIds = settings.Value.AdminUserIds;
+    private readonly long[] _adminUserIds = settings.Value.AdminUserIds ?? Array.Empty<long>();
     private readonly ILogger<CommandDispatcher> _logger = logger;
 
-    private const string AdminRefreshCallbackData = "admin_refresh";
+    // Кэшируем клавиатуру
+    private static readonly ReplyKeyboardMarkup MainKeyboard = new([
+        [BotCommands.Nearest, BotCommands.Today],
+        [BotCommands.Week, BotCommands.ChangeStop],
+        [BotCommands.ReportToAdmin, BotCommands.Back]
+    ])
+    { ResizeKeyboard = true };
+
     private bool IsAdmin(long userId) => _adminUserIds.Contains(userId);
 
     public async Task DispatchCommandAsync(long chatId, long userId, string command, string? args)
@@ -109,12 +116,25 @@ public class CommandDispatcher(
             return;
         }
 
-        var chatId = callbackQuery.Message?.Chat?.Id ?? 0;
         var userId = callbackQuery.From.Id;
+
+        // Проверяем наличие чата
+        if (callbackQuery.Message?.Chat?.Id is null or 0)
+        {
+            _logger.LogWarning("Callback without chat (UserId: {UserId})", userId);
+            await _botClient.AnswerCallbackQuery(
+                callbackQuery.Id,
+                "⚠️ CHAT NOT FOUND. USE /start IN PRIVATE CHAT.");
+            return;
+        }
+
+        var chatId = callbackQuery.Message.Chat.Id;
         var data = callbackQuery.Data;
 
+        // Отвечаем на callback (убираем "часики")
         await _botClient.AnswerCallbackQuery(callbackQuery.Id);
 
+        // Проверяем сессию
         if (!_userStateService.TryGet(userId, out _))
         {
             await _sender.SendAsync(chatId, "⛔ SESSION EXPIRED. USE /start.");
@@ -122,7 +142,7 @@ public class CommandDispatcher(
         }
 
         // Обработка системных callback
-        if (data == AdminRefreshCallbackData)
+        if (data == BotCommands.AdminRefresh)
         {
             await HandleAdminRefreshAsync(chatId, userId);
             return;
@@ -152,19 +172,19 @@ public class CommandDispatcher(
             chatId,
             BotMessages.StopSelected(stop.Name),
             parseMode: ParseMode.Markdown,
-            replyMarkup: GetMainKeyboard());
+            replyMarkup: MainKeyboard);
     }
 
     private async Task HandleStartAsync(long chatId, long userId)
     {
         var allStops = _storage.GetAllStops().ToList();
 
-        if (!_storage.HasData() || allStops.Count == 0)
+        if (allStops.Count == 0)
         {
             if (IsAdmin(userId))
             {
                 var adminKeyboard = new InlineKeyboardMarkup(
-                    InlineKeyboardButton.WithCallbackData("🔄 REFRESH", AdminRefreshCallbackData));
+                    InlineKeyboardButton.WithCallbackData("🔄 REFRESH", BotCommands.AdminRefresh));
                 await _sender.SendAsync(chatId, "⚠️ SCHEDULE NOT LOADED. PRESS TO REFRESH:", replyMarkup: adminKeyboard);
                 return;
             }
@@ -252,7 +272,14 @@ public class CommandDispatcher(
 
             foreach (var adminId in _adminUserIds)
             {
-                await _botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown);
+                try
+                {
+                    await _botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to send report to admin {AdminId}", adminId);
+                }
             }
             await _sender.SendAsync(chatId, "✅ REPORT SENT. THANK YOU.");
         }
@@ -265,20 +292,16 @@ public class CommandDispatcher(
 
     private async Task ShowReportInstructionsAsync(long chatId)
     {
-        var firstAdminId = _adminUserIds.Length > 0 ? _adminUserIds[0] : 0;
+        if (_adminUserIds.Length == 0)
+        {
+            await _sender.SendAsync(chatId, "⚠️ NO ADMINS CONFIGURED. CONTACT SUPPORT.");
+            return;
+        }
+
+        var firstAdminId = _adminUserIds[0];
         await _sender.SendAsync(
             chatId,
             BotMessages.ReportInstructions($"tg://user?id={firstAdminId}"),
             ParseMode.Markdown);
-    }
-
-    private static ReplyKeyboardMarkup GetMainKeyboard()
-    {
-        return new ReplyKeyboardMarkup([
-            [BotCommands.Nearest, BotCommands.Today],
-            [BotCommands.Week, BotCommands.ChangeStop],
-            [BotCommands.ReportToAdmin, BotCommands.Back]
-        ])
-        { ResizeKeyboard = true };
     }
 }

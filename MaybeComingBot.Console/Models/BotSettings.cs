@@ -8,9 +8,18 @@ public class BotSettings
     [MinLength(10, ErrorMessage = "BotToken must be at least 10 characters")]
     public string BotToken { get; set; } = string.Empty;
 
-    [Required(ErrorMessage = "JsonUrl is required")]
+    [Required(ErrorMessage = "ScheduleUrl is required")]
+    [Url(ErrorMessage = "ScheduleUrl must be a valid URL")]
+    public string ScheduleUrl { get; set; } = string.Empty;
+
+    // Для обратной совместимости с JSON ключом "JsonUrl"
+    [Obsolete("Use ScheduleUrl instead. This property is for JSON deserialization only.")]
     [Url(ErrorMessage = "JsonUrl must be a valid URL")]
-    public string JsonUrl { get; set; } = string.Empty;
+    public string JsonUrl
+    {
+        get => ScheduleUrl;
+        set => ScheduleUrl = value;
+    }
 
     [Required(ErrorMessage = "At least one AdminUserId is required")]
     [MinLength(1, ErrorMessage = "At least one admin user ID must be specified")]

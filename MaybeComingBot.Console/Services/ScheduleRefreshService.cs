@@ -22,7 +22,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
     private DateTime _lastAttemptTime = DateTime.MinValue;
 
     public DateTime LastSuccessfulUpdate => _lastSuccessfulUpdate;
-    public int FailureCount => Interlocked.CompareExchange(ref _failureCount, 0, 0);
+    public int FailureCount => Volatile.Read(ref _failureCount);
 
     public ScheduleRefreshService(
         ScheduleLoader loader,
@@ -36,10 +36,17 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         _logger = logger;
     }
 
+    public override void Dispose()
+    {
+        _refreshLock.Dispose();
+        base.Dispose();
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Refresh service started");
 
+        // Первичная загрузка
         try
         {
             await RefreshScheduleWithLockAsync(stoppingToken);
@@ -50,6 +57,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             throw;
         }
 
+        // Если данные не загружены, пробуем ещё раз через 30 секунд
         if (!_storage.HasData() && _intervalHours > 0)
         {
             _logger.LogWarning("Initial load failed, retrying in 30s");
@@ -72,12 +80,22 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             throw new InvalidOperationException("Schedule data could not be loaded");
         }
 
+        // Если авто-обновление отключено - ждём бесконечно
         if (_intervalHours <= 0)
         {
-            _logger.LogInformation("Auto-update disabled");
+            _logger.LogInformation("Auto-update disabled, waiting indefinitely");
+            try
+            {
+                await Task.Delay(Timeout.Infinite, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Нормальное завершение
+            }
             return;
         }
 
+        // Основной цикл обновления
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -98,10 +116,19 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Refresh loop error");
-                // Не вылетаем, продолжаем попытки
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                // Не вылетаем, продолжаем попытки с задержкой
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
+
+        _logger.LogInformation("Refresh service stopped");
     }
 
     public async Task ForceRefreshAsync(CancellationToken ct = default)
@@ -115,9 +142,11 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             return "NOT LOADED";
 
         var age = DateTime.UtcNow - _lastSuccessfulUpdate;
-        var ageStr = TimeHelper.FormatTimeSpan((int)age.TotalMinutes);
+        var ageMinutes = (int)Math.Min(age.TotalMinutes, int.MaxValue);
+        var ageStr = TimeHelper.FormatTimeSpan(ageMinutes);
 
-        if (age > TimeSpan.FromHours(_intervalHours * 1.5))
+        var staleThreshold = TimeSpan.FromHours(_intervalHours * 1.5);
+        if (age > staleThreshold)
             return $"⚠️ DATA STALE: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
 
         return $"✅ LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
@@ -129,7 +158,10 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             return "NO ATTEMPTS";
 
         var age = DateTime.UtcNow - _lastAttemptTime;
-        return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan((int)age.TotalMinutes)}), FAILS: {_failureCount}";
+        var ageMinutes = (int)Math.Min(age.TotalMinutes, int.MaxValue);
+        var failureCount = Volatile.Read(ref _failureCount);
+
+        return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan(ageMinutes)}), FAILS: {failureCount}";
     }
 
     private async Task RefreshScheduleWithLockAsync(CancellationToken ct)
@@ -157,7 +189,7 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
                 throw new InvalidOperationException("Schedule empty");
 
             _storage.Update(schedule);
-            Interlocked.Exchange(ref _failureCount, 0);
+            Volatile.Write(ref _failureCount, 0);
             _lastSuccessfulUpdate = DateTime.UtcNow;
 
             _logger.LogInformation("Refresh success: {Count} stops", schedule.Stops.Count);
@@ -165,24 +197,24 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         catch (Exception ex)
         {
             Interlocked.Increment(ref _failureCount);
-            _logger.LogError(ex, "Refresh failed (failures: {Count})", _failureCount);
+            var failureCount = Volatile.Read(ref _failureCount);
+            _logger.LogError(ex, "Refresh failed (failures: {Count})", failureCount);
             throw;
         }
     }
 
     private TimeSpan CalculateDelay()
     {
-        var failureCount = Interlocked.CompareExchange(ref _failureCount, 0, 0);
+        var failureCount = Volatile.Read(ref _failureCount);
 
         if (failureCount <= 0)
             return TimeSpan.FromHours(_intervalHours);
 
-        // Безопасный расчет backoff через Math.Pow
-        var backoffMinutes = failureCount > MaxBackoffFailureCount
-            ? TimeConstants.MaxRetryDelayMinutes
-            : (int)Math.Min(
-                TimeConstants.BaseRetryDelayMinutes * Math.Pow(2, failureCount - 1),
-                TimeConstants.MaxRetryDelayMinutes);
+        // Безопасный расчет backoff с ограничением
+        var effectiveFailures = Math.Min(failureCount, MaxBackoffFailureCount);
+        var backoffMinutes = Math.Min(
+            TimeConstants.BaseRetryDelayMinutes * Math.Pow(2, effectiveFailures - 1),
+            TimeConstants.MaxRetryDelayMinutes);
 
         return TimeSpan.FromMinutes(backoffMinutes);
     }

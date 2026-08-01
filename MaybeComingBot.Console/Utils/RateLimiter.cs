@@ -22,7 +22,7 @@ public class RateLimiter : IDisposable
     {
         _maxRequests = settings.Value.RateLimitMaxRequests;
         _window = TimeSpan.FromMinutes(settings.Value.RateLimitWindowMinutes);
-        _adminUserIds = settings.Value.AdminUserIds;
+        _adminUserIds = settings.Value.AdminUserIds ?? Array.Empty<long>(); // Защита от null
         _logger = logger;
 
         _cleanupTimer = new Timer(
@@ -34,22 +34,24 @@ public class RateLimiter : IDisposable
 
     public async Task<bool> IsAllowedAsync(long userId)
     {
+        // Админы всегда могут проходить
         if (_adminUserIds.Contains(userId))
             return true;
 
         var now = DateTime.UtcNow;
-        CleanupSingleUser(userId, now);
-
         var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit());
 
+        // Блокируем только на время обновления счетчика
         lock (limit)
         {
+            // Проверяем, не истекло ли окно
             if (now - limit.WindowStart > _window)
             {
                 limit.WindowStart = now;
                 limit.Count = 0;
             }
 
+            // Проверяем лимит
             if (limit.Count >= _maxRequests)
             {
                 _logger.LogWarning("Rate limit exceeded for {UserId} (count: {Count}, window: {Window}m)",
@@ -62,38 +64,39 @@ public class RateLimiter : IDisposable
         }
     }
 
-    private void CleanupSingleUser(long userId, DateTime now)
+    private async void CleanupExpiredEntries(object? state)
     {
-        if (_userLimits.TryGetValue(userId, out var limit))
+        try
         {
-            lock (limit)
-            {
-                if (now - limit.WindowStart > _window * 2)
-                {
-                    _userLimits.TryRemove(userId, out _);
-                }
-            }
+            await CleanupExpiredEntriesAsync();
         }
-    }
-
-    private void CleanupExpiredEntries(object? state)
-    {
-        // Запускаем асинхронную очистку синхронно, чтобы не терять исключения
-        _ = CleanupExpiredEntriesAsync();
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Cleanup failed");
+        }
     }
 
     private async Task CleanupExpiredEntriesAsync()
     {
         if (!await _cleanupLock.WaitAsync(0))
+        {
+            _logger.LogDebug("Cleanup already in progress, skipping");
             return;
+        }
 
         try
         {
             var now = DateTime.UtcNow;
+            var expirationThreshold = _window * 2;
+
+            // Собираем ключи для удаления
             var expiredKeys = _userLimits
-                .Where(kvp => now - kvp.Value.WindowStart > _window * 2)
+                .Where(kvp => now - kvp.Value.WindowStart > expirationThreshold)
                 .Select(kvp => kvp.Key)
                 .ToList();
+
+            if (expiredKeys.Count == 0)
+                return;
 
             foreach (var key in expiredKeys)
             {
@@ -103,8 +106,7 @@ public class RateLimiter : IDisposable
                 }
             }
 
-            if (expiredKeys.Count > 0)
-                _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
+            _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
         }
         catch (Exception ex)
         {
@@ -122,9 +124,14 @@ public class RateLimiter : IDisposable
             return;
 
         _disposed = true;
+
+        // Останавливаем таймер
+        _cleanupTimer?.Change(Timeout.Infinite, Timeout.Infinite);
         _cleanupTimer?.Dispose();
+
         _cleanupLock?.Dispose();
         _userLimits.Clear();
+
         GC.SuppressFinalize(this);
     }
 
