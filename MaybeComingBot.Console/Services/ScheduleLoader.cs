@@ -1,5 +1,6 @@
 ﻿using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -9,11 +10,14 @@ public class ScheduleLoader
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ScheduleLoader> _logger;
+    private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
+    private const string HttpClientName = nameof(ScheduleLoader);
+
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         AllowTrailingCommas = true,
-        ReadCommentHandling = JsonCommentHandling.Skip, // Поддержка комментариев
+        ReadCommentHandling = JsonCommentHandling.Skip,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
@@ -28,52 +32,125 @@ public class ScheduleLoader
 
     public async Task<ScheduleRoot> LoadAsync(CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
-            var client = _httpClientFactory.CreateClient(nameof(ScheduleLoader));
+            var client = _httpClientFactory.CreateClient(HttpClientName);
 
-            // Проверяем, что BaseAddress задан
-            if (client.BaseAddress is null)
+            // Проверяем BaseAddress
+            if (client.BaseAddress is null || string.IsNullOrWhiteSpace(client.BaseAddress.ToString()))
             {
-                _logger.LogError("BaseAddress not configured for ScheduleLoader HttpClient");
-                throw new InvalidOperationException("ScheduleLoader HttpClient BaseAddress is not configured");
+                _logger.LogError("BaseAddress not configured or empty for ScheduleLoader HttpClient");
+                throw new InvalidOperationException(
+                    "ScheduleLoader HttpClient BaseAddress is not configured or empty. " +
+                    "Please set JsonUrl in BotSettings.");
             }
 
             _logger.LogDebug("Loading schedule from {BaseAddress}", client.BaseAddress);
 
-            var schedule = await client.GetFromJsonAsync<ScheduleRoot>(
-                string.Empty,
-                _jsonOptions,
-                cancellationToken);
+            // ✅ Добавляем таймаут
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(_timeout);
 
-            if (schedule is null || schedule.Stops is null)
+            // ✅ Используем GetAsync для лучшего контроля
+            var response = await client.GetAsync(string.Empty, cts.Token);
+            response.EnsureSuccessStatusCode();
+
+            // Проверяем, что ответ не пустой
+            var contentLength = response.Content.Headers.ContentLength;
+            if (contentLength.HasValue && contentLength.Value == 0)
             {
-                _logger.LogWarning("Schedule response is null or empty");
+                _logger.LogWarning("Empty response from server (Content-Length: 0)");
                 return new ScheduleRoot { Stops = [] };
             }
 
-            _logger.LogDebug("Loaded {Count} stops", schedule.Stops.Count);
+            // Читаем и парсим JSON
+            var json = await response.Content.ReadAsStringAsync(cts.Token);
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                _logger.LogWarning("Empty JSON response from server");
+                return new ScheduleRoot { Stops = [] };
+            }
+
+            var schedule = JsonSerializer.Deserialize<ScheduleRoot>(json, _jsonOptions);
+
+            if (schedule is null || schedule.Stops is null)
+            {
+                _logger.LogWarning("Schedule response is null or invalid");
+                return new ScheduleRoot { Stops = [] };
+            }
+
+            stopwatch.Stop();
+            _logger.LogInformation(
+                "✅ Schedule loaded successfully in {ElapsedMs}ms. Stops: {Count}, Size: {SizeKB}KB",
+                stopwatch.ElapsedMilliseconds,
+                schedule.Stops.Count,
+                json.Length / 1024);
+
             return schedule;
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "JSON parse error");
-            throw new InvalidOperationException($"Failed to parse JSON: {ex.Message}", ex);
+            _logger.LogError(ex, "❌ JSON parse error at {Position}", ex.BytePositionInLine);
+            throw new InvalidOperationException(
+                $"Failed to parse JSON at position {ex.BytePositionInLine}: {ex.Message}", ex);
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "HTTP request failed. StatusCode: {StatusCode}, Message: {Message}",
+            _logger.LogError(ex, "❌ HTTP request failed. StatusCode: {StatusCode}, Message: {Message}",
                 ex.StatusCode, ex.Message);
             throw;
         }
-        catch (OperationCanceledException ex)
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("Schedule load cancelled: {Message}", ex.Message);
+            _logger.LogWarning("⏹️ Schedule load cancelled by user");
             throw;
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "⏰ Schedule load timed out after {Timeout}s", _timeout.TotalSeconds);
+            throw new TimeoutException($"Schedule load timed out after {_timeout.TotalSeconds}s", ex);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Load error");
+            _logger.LogError(ex, "❌ Unexpected error loading schedule");
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+        }
+    }
+
+    // ✅ Перегрузка для тестирования с пользовательским URL
+    public async Task<ScheduleRoot> LoadAsync(string? url, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return await LoadAsync(cancellationToken);
+
+        var client = _httpClientFactory.CreateClient(HttpClientName);
+        client.BaseAddress = new Uri(url);
+
+        // Сохраняем оригинальный BaseAddress, загружаем, восстанавливаем?
+        // Лучше просто использовать переданный URL напрямую
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(_timeout);
+
+        try
+        {
+            var response = await client.GetAsync(url, cts.Token);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(cts.Token);
+            var schedule = JsonSerializer.Deserialize<ScheduleRoot>(json, _jsonOptions);
+
+            return schedule ?? new ScheduleRoot { Stops = [] };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load schedule from {Url}", url);
             throw;
         }
     }

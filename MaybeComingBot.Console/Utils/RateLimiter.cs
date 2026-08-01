@@ -10,11 +10,15 @@ public class RateLimiter : IDisposable
     private readonly ConcurrentDictionary<long, UserRateLimit> _userLimits = new();
     private readonly int _maxRequests;
     private readonly TimeSpan _window;
-    private readonly long[] _adminUserIds;
+    private readonly HashSet<long> _adminUserIds;
     private readonly ILogger<RateLimiter> _logger;
     private readonly Timer _cleanupTimer;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private bool _disposed;
+    private int _totalRateLimitExceeded;
+
+    private const int CleanupIntervalMinutes = 10;
+    private const int ExpirationMultiplier = 2;
 
     public RateLimiter(
         IOptions<BotSettings> settings,
@@ -22,14 +26,14 @@ public class RateLimiter : IDisposable
     {
         _maxRequests = settings.Value.RateLimitMaxRequests;
         _window = TimeSpan.FromMinutes(settings.Value.RateLimitWindowMinutes);
-        _adminUserIds = settings.Value.AdminUserIds ?? Array.Empty<long>(); // Защита от null
+        _adminUserIds = new HashSet<long>(settings?.Value?.AdminUserIds ?? Array.Empty<long>());
         _logger = logger;
 
         _cleanupTimer = new Timer(
             CleanupExpiredEntries,
             null,
-            TimeSpan.FromMinutes(10),
-            TimeSpan.FromMinutes(10));
+            TimeSpan.FromMinutes(CleanupIntervalMinutes),
+            TimeSpan.FromMinutes(CleanupIntervalMinutes));
     }
 
     public async Task<bool> IsAllowedAsync(long userId)
@@ -54,6 +58,7 @@ public class RateLimiter : IDisposable
             // Проверяем лимит
             if (limit.Count >= _maxRequests)
             {
+                Interlocked.Increment(ref _totalRateLimitExceeded);
                 _logger.LogWarning("Rate limit exceeded for {UserId} (count: {Count}, window: {Window}m)",
                     userId, limit.Count, _window.TotalMinutes);
                 return false;
@@ -64,21 +69,28 @@ public class RateLimiter : IDisposable
         }
     }
 
-    private async void CleanupExpiredEntries(object? state)
+    private void CleanupExpiredEntries(object? state)
     {
-        try
+        if (_disposed) return;
+
+        Task.Run(async () =>
         {
-            await CleanupExpiredEntriesAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Cleanup failed");
-        }
+            try
+            {
+                await CleanupExpiredEntriesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Cleanup failed");
+            }
+        });
     }
 
     private async Task CleanupExpiredEntriesAsync()
     {
-        if (!await _cleanupLock.WaitAsync(0))
+        if (_disposed) return;
+
+        if (!await _cleanupLock.WaitAsync(TimeSpan.Zero))
         {
             _logger.LogDebug("Cleanup already in progress, skipping");
             return;
@@ -87,7 +99,7 @@ public class RateLimiter : IDisposable
         try
         {
             var now = DateTime.UtcNow;
-            var expirationThreshold = _window * 2;
+            var expirationThreshold = _window * ExpirationMultiplier;
 
             // Собираем ключи для удаления
             var expiredKeys = _userLimits
@@ -117,6 +129,18 @@ public class RateLimiter : IDisposable
             _cleanupLock.Release();
         }
     }
+
+    public void ResetUser(long userId)
+    {
+        if (_userLimits.TryRemove(userId, out _))
+        {
+            _logger.LogDebug("Reset rate limit for {UserId}", userId);
+        }
+    }
+
+    public int TotalRateLimitExceeded => Volatile.Read(ref _totalRateLimitExceeded);
+
+    public int ActiveUsersCount => _userLimits.Count;
 
     public void Dispose()
     {

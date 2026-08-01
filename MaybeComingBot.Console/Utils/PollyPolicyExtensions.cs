@@ -1,5 +1,6 @@
 ﻿using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Timeout;
@@ -9,41 +10,59 @@ namespace MaybeComingBot.Utils;
 
 public static class PollyPolicyExtensions
 {
+    private static readonly Random _jitter = new();
+    private const int DefaultTimeoutSeconds = 30;
+
     public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(IOptions<BotSettings> settings)
     {
         var maxRetries = settings.Value.MaxRetryCount;
         var baseDelaySeconds = settings.Value.RetryBaseDelaySeconds;
 
         return Policy
-            .Handle<HttpRequestException>()
-            .Or<TaskCanceledException>()
-            .OrResult<HttpResponseMessage>(r =>
+            .HandleResult<HttpResponseMessage>(r =>
                 r.StatusCode is HttpStatusCode.RequestTimeout
                     or HttpStatusCode.TooManyRequests
                     or HttpStatusCode.InternalServerError
                     or HttpStatusCode.BadGateway
                     or HttpStatusCode.ServiceUnavailable
                     or HttpStatusCode.GatewayTimeout)
+            .Or<HttpRequestException>()
+            .Or<TimeoutRejectedException>()
+            .Or<TaskCanceledException>()
             .WaitAndRetryAsync(
                 maxRetries,
-                retryAttempt => TimeSpan.FromSeconds(
-                    baseDelaySeconds * Math.Pow(2, retryAttempt - 1)), // 2, 4, 8, 16...
+                retryAttempt =>
+                {
+                    var baseDelay = TimeSpan.FromSeconds(
+                        baseDelaySeconds * Math.Pow(2, retryAttempt - 1));
+                    var jitterMs = _jitter.Next(0, 500);
+                    return baseDelay + TimeSpan.FromMilliseconds(jitterMs);
+                },
                 onRetry: (outcome, timespan, retryCount, context) =>
                 {
                     var logger = context.GetLoggerOrDefault();
-                    var url = outcome.Result?.RequestMessage?.RequestUri?.ToString() ?? "unknown";
-                    var statusCode = outcome.Result?.StatusCode.ToString() ?? "UNKNOWN";
 
-                    // Логируем только если это не последняя попытка
+                    string url = "unknown";
+                    string statusCode = "UNKNOWN";
+
+                    if (outcome.Result is HttpResponseMessage response)
+                    {
+                        url = response.RequestMessage?.RequestUri?.ToString() ?? "unknown";
+                        statusCode = response.StatusCode.ToString();
+                    }
+                    else if (outcome.Exception is not null)
+                    {
+                        statusCode = outcome.Exception.GetType().Name;
+                    }
+
                     if (retryCount < maxRetries)
                     {
-                        logger?.LogWarning(
+                        logger?.LogDebug(
                             "Retry {Retry}/{Max} in {Delay:F1}s for {Url} (Status: {StatusCode})",
                             retryCount, maxRetries, timespan.TotalSeconds, url, statusCode);
                     }
                     else
                     {
-                        // Последняя попытка - логируем как ошибку с деталями
                         logger?.LogError(
                             "All {Max} retries failed for {Url}. Last status: {StatusCode}",
                             maxRetries, url, statusCode);
@@ -51,19 +70,34 @@ public static class PollyPolicyExtensions
                 });
     }
 
-    public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
+    public static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy(
+        IOptions<BotSettings>? settings = null)
     {
-        // Pessimistic более надёжен для HTTP запросов
+        var timeoutSeconds = settings?.Value?.TimeoutSeconds > 0
+            ? settings.Value.TimeoutSeconds
+            : DefaultTimeoutSeconds;
+
         return Policy.TimeoutAsync<HttpResponseMessage>(
-            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(timeoutSeconds),
             TimeoutStrategy.Pessimistic);
     }
 
-    private static ILogger? GetLoggerOrDefault(this Context context)
+    // ⬇️ Убрали GetCircuitBreakerPolicy()
+
+    public static IAsyncPolicy<HttpResponseMessage> GetCombinedPolicy(
+        IOptions<BotSettings> settings)
+    {
+        return Policy.WrapAsync(
+            GetRetryPolicy(settings),
+            GetTimeoutPolicy(settings));
+    }
+
+    private static ILogger GetLoggerOrDefault(this Context context)
     {
         if (context.TryGetLogger(out var logger))
             return logger;
-        return null;
+
+        return NullLogger.Instance;
     }
 }
 

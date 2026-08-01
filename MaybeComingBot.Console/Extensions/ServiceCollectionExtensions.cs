@@ -23,15 +23,12 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<BotSettings>, BotSettingsValidator>();
 
-        // ============================================================
-        // 2. HTTP CLIENT
-        // ============================================================
         services.AddHttpClient(nameof(ScheduleLoader), client =>
         {
             var settings = configuration.GetBotSettings();
-            if (settings is not null && !string.IsNullOrEmpty(settings.JsonUrl))
+            if (settings is not null && !string.IsNullOrEmpty(settings.ScheduleUrl))
             {
-                client.BaseAddress = new Uri(settings.JsonUrl);
+                client.BaseAddress = new Uri(settings.ScheduleUrl);
             }
             client.Timeout = TimeSpan.FromSeconds(30);
         })
@@ -43,9 +40,6 @@ public static class ServiceCollectionExtensions
         .AddPolicyHandler(PollyPolicyExtensions.GetTimeoutPolicy())
         .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
-        // ============================================================
-        // 3. TELEGRAM CLIENT
-        // ============================================================
         services.AddSingleton<ITelegramBotClient>(provider =>
         {
             var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;

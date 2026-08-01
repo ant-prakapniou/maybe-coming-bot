@@ -29,21 +29,27 @@ public class CommandDispatcher(
     private readonly ScheduleFormatter _formatter = formatter;
     private readonly StopSelectionGuard _guard = guard;
     private readonly TelegramSender _sender = sender;
-    private readonly long[] _adminUserIds = settings.Value.AdminUserIds ?? Array.Empty<long>();
+    private readonly HashSet<long> _adminUserIds = new(settings?.Value?.AdminUserIds ?? Array.Empty<long>());
     private readonly ILogger<CommandDispatcher> _logger = logger;
 
-    // Кэшируем клавиатуру
-    private static readonly ReplyKeyboardMarkup MainKeyboard = new([
-        [BotCommands.Nearest, BotCommands.Today],
-        [BotCommands.Week, BotCommands.ChangeStop],
-        [BotCommands.ReportToAdmin, BotCommands.Back]
-    ])
+    private static readonly ReplyKeyboardMarkup MainKeyboard = new(new[]
+    {
+        new KeyboardButton[] { BotCommands.Nearest, BotCommands.Today },
+        new KeyboardButton[] { BotCommands.Week, BotCommands.ChangeStop },
+        new KeyboardButton[] { BotCommands.ReportToAdmin, BotCommands.Back }
+    })
     { ResizeKeyboard = true };
 
-    private bool IsAdmin(long userId) => _adminUserIds.Contains(userId);
+    private bool IsAdmin(long userId) => userId > 0 && _adminUserIds.Contains(userId);
 
     public async Task DispatchCommandAsync(long chatId, long userId, string command, string? args)
     {
+        if (chatId <= 0 || userId <= 0)
+        {
+            _logger.LogWarning("Invalid chatId or userId: Chat={ChatId}, User={UserId}", chatId, userId);
+            return;
+        }
+
         switch (command)
         {
             case BotCommands.Cancel:
@@ -117,9 +123,14 @@ public class CommandDispatcher(
         }
 
         var userId = callbackQuery.From.Id;
+        if (userId <= 0)
+        {
+            _logger.LogWarning("Callback with invalid user ID");
+            return;
+        }
 
-        // Проверяем наличие чата
-        if (callbackQuery.Message?.Chat?.Id is null or 0)
+        var message = callbackQuery.Message;
+        if (message?.Chat?.Id is null or 0)
         {
             _logger.LogWarning("Callback without chat (UserId: {UserId})", userId);
             await _botClient.AnswerCallbackQuery(
@@ -128,7 +139,7 @@ public class CommandDispatcher(
             return;
         }
 
-        var chatId = callbackQuery.Message.Chat.Id;
+        var chatId = message.Chat.Id;
         var data = callbackQuery.Data;
 
         // Отвечаем на callback (убираем "часики")
@@ -193,8 +204,7 @@ public class CommandDispatcher(
             return;
         }
 
-        var stopKeyboard = new InlineKeyboardMarkup(
-            allStops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
+        var stopKeyboard = CreateStopKeyboard(allStops);
 
         if (_userStateService.TryGet(userId, out var state))
             state.SelectedStopId = string.Empty;
@@ -224,9 +234,7 @@ public class CommandDispatcher(
                 return;
             }
 
-            var keyboard = new InlineKeyboardMarkup(
-                stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
-
+            var keyboard = CreateStopKeyboard(stops);
             await _sender.SendAsync(chatId, $"{BotMessages.UpdateSuccess} {stops.Count} STOPS.\n\nSELECT STOP:", replyMarkup: keyboard);
         }
         catch (Exception ex)
@@ -248,7 +256,6 @@ public class CommandDispatcher(
                   $"• {_refreshService.GetStatus()}\n" +
                   $"• {_refreshService.GetLastAttemptInfo()}\n" +
                   $"• STOPS: {_storage.StopCount}\n" +
-                  $"• CACHED TRIPS: {_storage.CachedTripsCount}\n" +
                   $"• ACTIVE USERS: {_userStateService.GetActiveUsersCount()}";
 
         await _sender.SendAsync(chatId, msg, ParseMode.Markdown);
@@ -265,10 +272,15 @@ public class CommandDispatcher(
         try
         {
             var state = _userStateService.GetOrCreate(userId);
-            var fullName = string.IsNullOrEmpty(state.FirstName) ? userId.ToString() : $"{state.FirstName} {state.LastName}".Trim();
-            var username = string.IsNullOrEmpty(state.Username) ? "NO_USERNAME" : $"@{state.Username}";
+            var fullName = string.IsNullOrEmpty(state.FirstName)
+                ? userId.ToString()
+                : $"{state.FirstName} {state.LastName}".Trim();
+            var username = string.IsNullOrEmpty(state.Username)
+                ? "NO_USERNAME"
+                : $"@{state.Username}";
 
-            var adminMsg = $"📨 *NEW REPORT*\n\nUSER: {TimeHelper.EscapeMarkdown(fullName)}\nID: {userId}\nUSERNAME: {TimeHelper.EscapeMarkdown(username)}\n\n*MESSAGE:*\n{TimeHelper.EscapeMarkdown(reportText)}";
+            var escapedReport = TimeHelper.EscapeMarkdown(reportText);
+            var adminMsg = $"📨 *NEW REPORT*\n\nUSER: {TimeHelper.EscapeMarkdown(fullName)}\nID: {userId}\nUSERNAME: {TimeHelper.EscapeMarkdown(username)}\n\n*MESSAGE:*\n{escapedReport}";
 
             foreach (var adminId in _adminUserIds)
             {
@@ -292,16 +304,22 @@ public class CommandDispatcher(
 
     private async Task ShowReportInstructionsAsync(long chatId)
     {
-        if (_adminUserIds.Length == 0)
+        if (_adminUserIds.Count == 0)
         {
             await _sender.SendAsync(chatId, "⚠️ NO ADMINS CONFIGURED. CONTACT SUPPORT.");
             return;
         }
 
-        var firstAdminId = _adminUserIds[0];
+        var firstAdminId = _adminUserIds.First();
         await _sender.SendAsync(
             chatId,
             BotMessages.ReportInstructions($"tg://user?id={firstAdminId}"),
             ParseMode.Markdown);
+    }
+
+    private static InlineKeyboardMarkup CreateStopKeyboard(IEnumerable<Stop> stops)
+    {
+        return new InlineKeyboardMarkup(
+            stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
     }
 }

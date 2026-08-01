@@ -11,6 +11,7 @@ public class UserStateService : IUserStateService
     private readonly ConcurrentDictionary<long, UserState> _states = new();
     private readonly ILogger<UserStateService> _logger;
     private readonly BotSettings _settings;
+    private const int DefaultTtlHours = 24;
 
     public UserStateService(
         IOptions<BotSettings> settings,
@@ -22,31 +23,36 @@ public class UserStateService : IUserStateService
 
     public UserState GetOrCreate(long userId)
     {
-        return _states.GetOrAdd(userId, _ => new UserState
-        {
-            SelectedStopId = string.Empty,
-            LastActivity = DateTime.UtcNow
-        });
+        if (userId <= 0)
+            throw new ArgumentException("Invalid userId", nameof(userId));
+
+        return _states.GetOrAdd(userId, _ => CreateUserState());
     }
 
     public bool TryGet(long userId, out UserState state)
     {
+        if (userId <= 0)
+        {
+            state = null!;
+            return false;
+        }
+
         return _states.TryGetValue(userId, out state!);
     }
 
     public void SetStop(long userId, string stopId)
     {
+        if (userId <= 0)
+            throw new ArgumentException("Invalid userId", nameof(userId));
+
+        if (string.IsNullOrWhiteSpace(stopId))
+            throw new ArgumentException("Invalid stopId", nameof(stopId));
+
         _states.AddOrUpdate(userId,
-            _ => new UserState
-            {
-                SelectedStopId = stopId,
-                LastActivity = DateTime.UtcNow,
-                CommandCount = 1
-            },
+            _ => CreateUserState(stopId: stopId, commandCount: 1),
             (_, state) => {
                 state.SelectedStopId = stopId;
                 state.LastActivity = DateTime.UtcNow;
-                state.CommandCount++;
                 return state;
             });
 
@@ -55,14 +61,11 @@ public class UserStateService : IUserStateService
 
     public void SetUserInfo(long userId, string firstName, string? lastName, string? username)
     {
+        if (userId <= 0)
+            throw new ArgumentException("Invalid userId", nameof(userId));
+
         _states.AddOrUpdate(userId,
-            _ => new UserState
-            {
-                FirstName = firstName,
-                LastName = lastName ?? string.Empty,
-                Username = username ?? string.Empty,
-                LastActivity = DateTime.UtcNow
-            },
+            _ => CreateUserState(firstName, lastName, username),
             (_, state) => {
                 if (!string.IsNullOrWhiteSpace(firstName)) state.FirstName = firstName;
                 if (!string.IsNullOrWhiteSpace(lastName)) state.LastName = lastName;
@@ -74,20 +77,28 @@ public class UserStateService : IUserStateService
 
     public void Clear(long userId)
     {
+        if (userId <= 0) return;
+
         if (_states.TryRemove(userId, out _))
             _logger.LogDebug("Cleared state for {UserId}", userId);
     }
 
     public void UpdateActivity(long userId)
     {
-        if (_states.TryGetValue(userId, out var state))
-        {
-            state.LastActivity = DateTime.UtcNow;
-        }
+        if (userId <= 0) return;
+
+        _states.AddOrUpdate(userId,
+            _ => CreateUserState(),
+            (_, state) => {
+                state.LastActivity = DateTime.UtcNow;
+                return state;
+            });
     }
 
     public void ClearStop(long userId)
     {
+        if (userId <= 0) return;
+
         if (_states.TryGetValue(userId, out var state))
         {
             state.SelectedStopId = string.Empty;
@@ -98,25 +109,61 @@ public class UserStateService : IUserStateService
 
     public bool HasStopSelected(long userId)
     {
+        if (userId <= 0) return false;
+
         return _states.TryGetValue(userId, out var state) &&
                !string.IsNullOrEmpty(state.SelectedStopId);
     }
 
     public int GetActiveUsersCount()
     {
-        var ttl = TimeSpan.FromHours(_settings.UserStateTtlHours);
+        var ttl = TimeSpan.FromHours(_settings.UserStateTtlHours > 0
+            ? _settings.UserStateTtlHours
+            : DefaultTtlHours);
         var now = DateTime.UtcNow;
-        return _states.Count(kvp => now - kvp.Value.LastActivity < ttl);
+
+        return _states.Values.Count(state => now - state.LastActivity < ttl);
     }
 
     public IEnumerable<long> GetExpiredKeys(TimeSpan expiry)
     {
         var now = DateTime.UtcNow;
-        var keys = _states.Keys.ToList();
 
-        return keys
-            .Where(key => _states.TryGetValue(key, out var state) &&
-                          now - state.LastActivity > expiry)
+        return _states
+            .Where(kvp => now - kvp.Value.LastActivity > expiry)
+            .Select(kvp => kvp.Key)
             .ToList();
+    }
+
+    public bool IsExpired(long userId)
+    {
+        if (userId <= 0) return true;
+
+        if (!_states.TryGetValue(userId, out var state))
+            return true;
+
+        var ttl = TimeSpan.FromHours(_settings.UserStateTtlHours > 0
+            ? _settings.UserStateTtlHours
+            : DefaultTtlHours);
+
+        return DateTime.UtcNow - state.LastActivity > ttl;
+    }
+
+    private static UserState CreateUserState(
+        string? firstName = null,
+        string? lastName = null,
+        string? username = null,
+        string? stopId = null,
+        int commandCount = 0)
+    {
+        return new UserState
+        {
+            FirstName = firstName ?? string.Empty,
+            LastName = lastName ?? string.Empty,
+            Username = username ?? string.Empty,
+            SelectedStopId = stopId ?? string.Empty,
+            LastActivity = DateTime.UtcNow,
+            CommandCount = commandCount
+        };
     }
 }

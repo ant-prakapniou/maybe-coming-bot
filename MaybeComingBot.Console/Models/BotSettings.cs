@@ -12,15 +12,6 @@ public class BotSettings
     [Url(ErrorMessage = "ScheduleUrl must be a valid URL")]
     public string ScheduleUrl { get; set; } = string.Empty;
 
-    // Для обратной совместимости с JSON ключом "JsonUrl"
-    [Obsolete("Use ScheduleUrl instead. This property is for JSON deserialization only.")]
-    [Url(ErrorMessage = "JsonUrl must be a valid URL")]
-    public string JsonUrl
-    {
-        get => ScheduleUrl;
-        set => ScheduleUrl = value;
-    }
-
     [Required(ErrorMessage = "At least one AdminUserId is required")]
     [MinLength(1, ErrorMessage = "At least one admin user ID must be specified")]
     public long[] AdminUserIds { get; set; } = [];
@@ -42,4 +33,8 @@ public class BotSettings
 
     [Range(1, 60, ErrorMessage = "RetryBaseDelaySeconds must be between 1 and 60")]
     public int RetryBaseDelaySeconds { get; set; } = 2;
+
+    // ✅ Добавляем только это (новое свойство)
+    [Range(5, 120, ErrorMessage = "TimeoutSeconds must be between 5 and 120")]
+    public int TimeoutSeconds { get; set; } = 30;
 }

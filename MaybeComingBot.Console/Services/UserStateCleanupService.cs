@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MaybeComingBot.Models;
+using System.Threading;
 
 namespace MaybeComingBot.Services;
 
@@ -14,6 +15,7 @@ public class UserStateCleanupService : BackgroundService
     private readonly ILogger<UserStateCleanupService> _logger;
     private readonly IUserStateService _userStateService;
     private readonly TimeSpan _expiry;
+    private int _totalCleaned;
 
     public UserStateCleanupService(
         ILogger<UserStateCleanupService> logger,
@@ -25,6 +27,8 @@ public class UserStateCleanupService : BackgroundService
         var ttlHours = settings.Value.UserStateTtlHours;
         _expiry = TimeSpan.FromHours(ttlHours > 0 ? ttlHours : 2);
     }
+
+    public int TotalCleaned => Volatile.Read(ref _totalCleaned);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -42,7 +46,7 @@ public class UserStateCleanupService : BackgroundService
                 if (stoppingToken.IsCancellationRequested)
                     break;
 
-                var expiredKeys = _userStateService.GetExpiredKeys(_expiry).ToList();
+                var expiredKeys = _userStateService.GetExpiredKeys(_expiry)?.ToList() ?? [];
 
                 if (expiredKeys.Count == 0)
                 {
@@ -65,10 +69,13 @@ public class UserStateCleanupService : BackgroundService
                     }
                 }
 
+                Interlocked.Add(ref _totalCleaned, expiredKeys.Count);
+
                 _logger.LogInformation(
-                    "🧹 Cleaned up {Count} expired user states (TTL: {ExpiryHours:F1}h)",
+                    "🧹 Cleaned up {Count} expired user states (TTL: {ExpiryHours:F1}h). Total cleaned: {Total}",
                     expiredKeys.Count,
-                    _expiry.TotalHours);
+                    _expiry.TotalHours,
+                    TotalCleaned);
             }
             catch (OperationCanceledException)
             {
@@ -88,7 +95,7 @@ public class UserStateCleanupService : BackgroundService
             }
         }
 
-        _logger.LogInformation("🛑 User state cleanup stopped");
+        _logger.LogInformation("🛑 User state cleanup stopped. Total cleaned: {Total}", TotalCleaned);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

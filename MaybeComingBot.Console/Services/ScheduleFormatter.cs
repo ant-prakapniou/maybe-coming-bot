@@ -3,6 +3,7 @@ using MaybeComingBot.Constants;
 using MaybeComingBot.Models;
 using MaybeComingBot.Utils;
 using Microsoft.Extensions.Logging;
+using System.Text;
 
 namespace MaybeComingBot.Services;
 
@@ -23,7 +24,16 @@ public class ScheduleFormatter(
         var sortedTrips = GetSortedTrips(todayTrips);
 
         if (sortedTrips.Count == 0)
-            return BotMessages.NoTripsToday(stop.Name, (DayOfWeek)day);
+        {
+            // Ищем в следующие дни
+            var nextDayTrip = FindNextDayTrip(stop, day);
+            if (nextDayTrip == null)
+            {
+                return $"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n" +
+                       "❌ NO TRIPS IN THE NEAR FUTURE (7 DAYS).";
+            }
+            return FormatFutureDayTrip(stop, nextDayTrip.Value.Day, nextDayTrip.Value.Trip);
+        }
 
         // Ищем следующий рейс сегодня
         var nextIndex = sortedTrips.FindIndex(x => x.Minutes >= nowMinutes);
@@ -33,15 +43,15 @@ public class ScheduleFormatter(
             return FormatNextTrip(stop, sortedTrips, nextIndex, nowMinutes);
         }
 
-        // Если сегодня нет рейсов, ищем в следующие дни
-        var nextDayTrip = FindNextDayTrip(stop, day);
-        if (nextDayTrip == null)
+        // Если сегодня нет рейсов после текущего времени, ищем в следующие дни
+        var nextDayTripAfter = FindNextDayTrip(stop, day);
+        if (nextDayTripAfter == null)
         {
-            return "🚌 *" + TimeHelper.EscapeMarkdown(stop.Name) + "*\n\n" +
-                   "❌ NO TRIPS IN THE NEAR FUTURE (7 DAYS).";
+            return $"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n" +
+                   "❌ NO MORE TRIPS TODAY AND NEXT 7 DAYS.";
         }
 
-        return FormatFutureDayTrip(stop, nextDayTrip.Value.Day, nextDayTrip.Value.Trip);
+        return FormatFutureDayTrip(stop, nextDayTripAfter.Value.Day, nextDayTripAfter.Value.Trip);
     }
 
     public string FormatToday(Stop stop)
@@ -55,25 +65,36 @@ public class ScheduleFormatter(
             return BotMessages.NoTripsToday(stop.Name, (DayOfWeek)day);
 
         var nowMinutes = now.Hour * TimeConstants.MinutesInHour + now.Minute;
-        var response = $"📅 *TODAY ({now:dddd})*\n🚏 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
+        var response = new StringBuilder();
+        response.AppendLine($"📅 *TODAY ({now:dddd})*");
+        response.AppendLine($"🚏 *{TimeHelper.EscapeMarkdown(stop.Name)}*");
+        response.AppendLine();
 
         foreach (var item in sortedTrips)
         {
-            var mark = item.Minutes < nowMinutes ? "✅"
-                : item.Minutes == nowMinutes ? "🔴"
-                : "⬜";
-            response += $"{mark} {item.Trip.Time}";
+            string mark;
+            if (item.Minutes < nowMinutes)
+                mark = "✅ (PASSED)";
+            else if (item.Minutes == nowMinutes)
+                mark = "🔴 NOW";
+            else
+                mark = "⬜";
+
+            response.Append($"{mark} {item.Trip.Time}");
             if (!string.IsNullOrWhiteSpace(item.Trip.Note))
-                response += $" ({TimeHelper.EscapeMarkdown(item.Trip.Note)})";
-            response += "\n";
+                response.Append($" ({TimeHelper.EscapeMarkdown(item.Trip.Note)})");
+            response.AppendLine();
         }
 
-        return response;
+        return response.ToString();
     }
 
     public string FormatWeek(Stop stop)
     {
-        var response = $"📅 *WEEK SCHEDULE*\n🚏 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
+        var response = new StringBuilder();
+        response.AppendLine($"📅 *WEEK SCHEDULE*");
+        response.AppendLine($"🚏 *{TimeHelper.EscapeMarkdown(stop.Name)}*");
+        response.AppendLine();
 
         for (int day = 0; day < 7; day++)
         {
@@ -81,25 +102,28 @@ public class ScheduleFormatter(
             var trips = _storage.GetTripsForDay(stop.Id, day);
             var sortedTrips = GetSortedTrips(trips);
 
-            response += $"*{dayName}*: ";
+            response.Append($"*{dayName}*: ");
 
             if (sortedTrips.Count == 0)
             {
-                response += "NO TRIPS\n";
+                response.AppendLine("🚫 NO TRIPS");
             }
             else
             {
                 var times = string.Join(", ", sortedTrips.Select(x => x.Trip.Time));
-                response += $"{times}\n";
+                response.AppendLine(times);
             }
+
+            // Добавляем разделитель между днями
+            if (day < 6)
+                response.AppendLine("━━━━━━━━━━━━━━━━━━━");
         }
 
-        return response;
+        return response.ToString();
     }
 
     // Вспомогательные методы
 
-    // Возвращаем НЕ-nullable кортеж (int Minutes, а не int? Minutes)
     private static List<(Trip Trip, int Minutes)> GetSortedTrips(IReadOnlyList<Trip>? trips)
     {
         if (trips == null || trips.Count == 0)
@@ -109,7 +133,7 @@ public class ScheduleFormatter(
             .Where(t => t != null)
             .Select(t => (Trip: t, Minutes: TimeHelper.ToMinutes(t.Time)))
             .Where(x => x.Minutes.HasValue)
-            .Select(x => (Trip: x.Trip, Minutes: x.Minutes.GetValueOrDefault())) // Безопасно извлекаем Value
+            .Select(x => (x.Trip, Minutes: x.Minutes.Value))
             .OrderBy(x => x.Minutes)
             .ToList();
     }
@@ -120,31 +144,34 @@ public class ScheduleFormatter(
         var wait = nearest.Minutes - nowMinutes;
         if (wait < 0) wait += TimeConstants.MinutesInDay;
 
-        var response = $"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
-        response += $"🟢 *NEXT:* {nearest.Trip.Time}";
+        var response = new StringBuilder();
+        response.AppendLine($"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*");
+        response.AppendLine();
+        response.Append($"🟢 *NEXT:* {nearest.Trip.Time}");
         if (!string.IsNullOrEmpty(nearest.Trip.Note))
-            response += $" ({TimeHelper.EscapeMarkdown(nearest.Trip.Note)})";
-        response += $"\n⏱ *IN {TimeHelper.FormatTimeSpan(wait)}*\n\n";
+            response.Append($" ({TimeHelper.EscapeMarkdown(nearest.Trip.Note)})");
+        response.AppendLine($"\n⏱ *IN {TimeHelper.FormatTimeSpan(wait)}*");
+        response.AppendLine();
 
         // Следующий рейс
         var nextIndex = index + 1;
         if (nextIndex < sortedTrips.Count)
         {
             var next = sortedTrips[nextIndex];
-            response += $"🔵 *FOLLOWING:* {next.Trip.Time}";
+            response.Append($"🔵 *FOLLOWING:* {next.Trip.Time}");
             if (!string.IsNullOrEmpty(next.Trip.Note))
-                response += $" ({TimeHelper.EscapeMarkdown(next.Trip.Note)})";
+                response.Append($" ({TimeHelper.EscapeMarkdown(next.Trip.Note)})");
 
             var nextWait = next.Minutes - nowMinutes;
             if (nextWait < 0) nextWait += TimeConstants.MinutesInDay;
-            response += $"\n⏱ *IN {TimeHelper.FormatTimeSpan(nextWait)}*";
+            response.Append($"\n⏱ *IN {TimeHelper.FormatTimeSpan(nextWait)}*");
         }
         else
         {
-            response += "NO MORE TRIPS TODAY.";
+            response.Append("NO MORE TRIPS TODAY.");
         }
 
-        return response;
+        return response.ToString();
     }
 
     private (DayOfWeek Day, Trip Trip)? FindNextDayTrip(Stop stop, int startDay)
@@ -157,8 +184,7 @@ public class ScheduleFormatter(
 
             if (sortedTrips.Count > 0)
             {
-                (DayOfWeek Day, Trip Trip) result = ((DayOfWeek)day, sortedTrips[0].Trip);
-                return result;
+                return ((DayOfWeek)day, sortedTrips[0].Trip);
             }
         }
         return null;
@@ -166,11 +192,13 @@ public class ScheduleFormatter(
 
     private string FormatFutureDayTrip(Stop stop, DayOfWeek day, Trip trip)
     {
-        var response = $"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*\n\n";
-        response += $"📅 *NEXT TRIP: {day}*\n";
-        response += $"🟢 *TIME:* {trip.Time}";
+        var response = new StringBuilder();
+        response.AppendLine($"🚌 *{TimeHelper.EscapeMarkdown(stop.Name)}*");
+        response.AppendLine();
+        response.AppendLine($"📅 *NEXT TRIP: {day}*");
+        response.Append($"🟢 *TIME:* {trip.Time}");
         if (!string.IsNullOrEmpty(trip.Note))
-            response += $" ({TimeHelper.EscapeMarkdown(trip.Note)})";
-        return response;
+            response.Append($" ({TimeHelper.EscapeMarkdown(trip.Note)})");
+        return response.ToString();
     }
 }

@@ -14,4 +14,5 @@ public interface IUserStateService
     bool HasStopSelected(long userId);
     int GetActiveUsersCount();
     void ClearStop(long userId);
+    public bool IsExpired(long userId);
 }
