@@ -14,6 +14,7 @@ public class RateLimiter : IDisposable
     private readonly ILogger<RateLimiter> _logger;
     private readonly Timer _cleanupTimer;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
+    private bool _disposed;
 
     public RateLimiter(
         IOptions<BotSettings> settings,
@@ -24,7 +25,11 @@ public class RateLimiter : IDisposable
         _adminUserIds = settings.Value.AdminUserIds;
         _logger = logger;
 
-        _cleanupTimer = new Timer(CleanupExpiredEntries, null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
+        _cleanupTimer = new Timer(
+            CleanupExpiredEntries,
+            null,
+            TimeSpan.FromMinutes(10),
+            TimeSpan.FromMinutes(10));
     }
 
     public async Task<bool> IsAllowedAsync(long userId)
@@ -71,7 +76,13 @@ public class RateLimiter : IDisposable
         }
     }
 
-    private async void CleanupExpiredEntries(object? state)
+    private void CleanupExpiredEntries(object? state)
+    {
+        // Запускаем асинхронную очистку синхронно, чтобы не терять исключения
+        _ = CleanupExpiredEntriesAsync();
+    }
+
+    private async Task CleanupExpiredEntriesAsync()
     {
         if (!await _cleanupLock.WaitAsync(0))
             return;
@@ -107,8 +118,14 @@ public class RateLimiter : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         _cleanupTimer?.Dispose();
         _cleanupLock?.Dispose();
+        _userLimits.Clear();
+        GC.SuppressFinalize(this);
     }
 
     private class UserRateLimit

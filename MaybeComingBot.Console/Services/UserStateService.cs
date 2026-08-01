@@ -28,6 +28,8 @@ public class UserStateService : IUserStateService
     public void SetStop(long userId, string stopId)
     {
         var state = _states.GetOrAdd(userId, _ => new UserState());
+        // Используем lock на самом состоянии, но это нормально,
+        // т.к. состояние принадлежит конкретному пользователю
         lock (state)
         {
             state.SelectedStopId = stopId;
@@ -69,7 +71,6 @@ public class UserStateService : IUserStateService
     public IEnumerable<long> GetExpiredKeys(TimeSpan expiry)
     {
         var now = DateTime.UtcNow;
-        // Создаём список ключей для избежания изменений коллекции во время итерации
         var keys = _states.Keys.ToList();
 
         return keys

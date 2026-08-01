@@ -12,7 +12,7 @@ public static class PollyPolicyExtensions
     public static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(IOptions<BotSettings> settings)
     {
         var maxRetries = settings.Value.MaxRetryCount;
-        var baseDelay = settings.Value.RetryBaseDelaySeconds;
+        var baseDelaySeconds = settings.Value.RetryBaseDelaySeconds;
 
         return Policy
             .Handle<HttpRequestException>()
@@ -26,7 +26,8 @@ public static class PollyPolicyExtensions
                     or HttpStatusCode.GatewayTimeout)
             .WaitAndRetryAsync(
                 maxRetries,
-                retryAttempt => TimeSpan.FromSeconds(Math.Pow(baseDelay, retryAttempt)),
+                retryAttempt => TimeSpan.FromSeconds(
+                    baseDelaySeconds * Math.Pow(2, retryAttempt - 1)), // Экспоненциальный backoff: 2, 4, 8, 16...
                 onRetry: (outcome, timespan, retryCount, context) =>
                 {
                     var logger = context.GetLoggerOrDefault();

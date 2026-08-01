@@ -8,12 +8,13 @@ namespace MaybeComingBot.Services;
 public class ScheduleStorage : IScheduleStorage
 {
     private ScheduleRoot _data = new() { Stops = [] };
-    private Dictionary<string, Stop> _stopDict = new();
-    private readonly ConcurrentDictionary<string, List<Trip>> _tripCache = new();
-    private readonly ILogger<ScheduleStorage> _logger;
-    private readonly SemaphoreSlim _loadLock = new(1, 1);
-    private volatile bool _isLoaded;
+    private volatile Dictionary<string, Stop> _stopDict = new();
+    private volatile ConcurrentDictionary<string, IReadOnlyList<Trip>> _tripCache = new();
     private volatile List<Stop> _cachedStops = [];
+    private volatile bool _isLoaded;
+
+    private readonly ILogger<ScheduleStorage> _logger;
+    private readonly SemaphoreSlim _updateLock = new(1, 1);
 
     public ScheduleStorage(ILogger<ScheduleStorage> logger)
     {
@@ -27,15 +28,8 @@ public class ScheduleStorage : IScheduleStorage
         if (string.IsNullOrEmpty(id) || !_isLoaded)
             return null;
 
-        _loadLock.Wait();
-        try
-        {
-            return _stopDict.TryGetValue(id, out var stop) ? stop : null;
-        }
-        finally
-        {
-            _loadLock.Release();
-        }
+        _stopDict.TryGetValue(id, out var stop);
+        return stop;
     }
 
     public IReadOnlyList<Trip>? GetTripsForDay(string stopId, int day)
@@ -44,16 +38,8 @@ public class ScheduleStorage : IScheduleStorage
             return null;
 
         var key = $"{stopId}_{day}";
-
-        _loadLock.Wait();
-        try
-        {
-            return _tripCache.TryGetValue(key, out var trips) ? trips.AsReadOnly() : null;
-        }
-        finally
-        {
-            _loadLock.Release();
-        }
+        _tripCache.TryGetValue(key, out var trips);
+        return trips;
     }
 
     public void Update(ScheduleRoot newData)
@@ -64,116 +50,132 @@ public class ScheduleStorage : IScheduleStorage
             return;
         }
 
-        var clonedData = new ScheduleRoot();
+        // Строим новые структуры ДО блокировки
+        var (newStopDict, newTripCache, newCachedStops, hasData) = BuildDataStructures(newData);
 
-        if (newData.Stops is null || newData.Stops.Count == 0)
-        {
-            clonedData.Stops = [];
-        }
-        else
-        {
-            clonedData.Stops = new List<Stop>(newData.Stops.Count);
-
-            foreach (var stop in newData.Stops)
-            {
-                if (stop is null || string.IsNullOrEmpty(stop.Id))
-                    continue;
-
-                var clonedStop = new Stop
-                {
-                    Id = stop.Id,
-                    Name = stop.Name ?? string.Empty,
-                    Schedule = new List<DaySchedule>()
-                };
-
-                if (stop.Schedule is not null)
-                {
-                    foreach (var daySchedule in stop.Schedule)
-                    {
-                        if (daySchedule is null)
-                            continue;
-
-                        var clonedDay = new DaySchedule
-                        {
-                            Day = daySchedule.Day,
-                            Trips = new List<Trip>()
-                        };
-
-                        if (daySchedule.Trips is not null)
-                        {
-                            foreach (var trip in daySchedule.Trips)
-                            {
-                                if (trip is null)
-                                    continue;
-
-                                clonedDay.Trips.Add(new Trip
-                                {
-                                    Time = trip.Time ?? string.Empty,
-                                    Bus = trip.Bus,
-                                    Note = trip.Note ?? string.Empty
-                                });
-                            }
-                        }
-
-                        clonedStop.Schedule.Add(clonedDay);
-                    }
-                }
-
-                clonedData.Stops.Add(clonedStop);
-            }
-        }
-
-        _loadLock.Wait();
+        // Блокируем ТОЛЬКО на время замены ссылок (микросекунды)
+        _updateLock.Wait();
         try
         {
-            _data = clonedData;
-            _data.Stops ??= [];
-
-            var uniqueStops = new Dictionary<string, Stop>();
-            foreach (var stop in _data.Stops)
-            {
-                if (stop is null || string.IsNullOrEmpty(stop.Id))
-                    continue;
-
-                stop.Schedule ??= [];
-                foreach (var daySchedule in stop.Schedule)
-                    daySchedule.Trips ??= [];
-
-                uniqueStops.TryAdd(stop.Id, stop);
-            }
-
-            _stopDict = uniqueStops;
-
-            _tripCache.Clear();
-            foreach (var stop in _data.Stops)
-            {
-                if (stop.Schedule is null)
-                    continue;
-
-                foreach (var daySchedule in stop.Schedule)
-                {
-                    if (daySchedule.Trips is null || daySchedule.Trips.Count == 0)
-                        continue;
-
-                    var key = $"{stop.Id}_{daySchedule.Day}";
-                    _tripCache[key] = [.. daySchedule.Trips];
-                }
-            }
-
-            _cachedStops = [.. _data.Stops];
-            _isLoaded = true;
+            _stopDict = newStopDict;
+            _tripCache = newTripCache;
+            _cachedStops = newCachedStops;
+            _data = newData;
+            _isLoaded = hasData;
         }
         finally
         {
-            _loadLock.Release();
+            _updateLock.Release();
         }
 
         _logger.LogDebug("Updated: {Stops} stops, {Trips} trip caches",
-            _data.Stops.Count, _tripCache.Count);
+            newCachedStops.Count, newTripCache.Count);
     }
 
-    public bool HasData() => _isLoaded && _data.Stops is not null && _data.Stops.Count > 0;
+    private (Dictionary<string, Stop> StopDict, ConcurrentDictionary<string, IReadOnlyList<Trip>> TripCache, List<Stop> CachedStops, bool HasData) BuildDataStructures(ScheduleRoot newData)
+    {
+        if (newData.Stops is null || newData.Stops.Count == 0)
+        {
+            return (new Dictionary<string, Stop>(), new ConcurrentDictionary<string, IReadOnlyList<Trip>>(), [], false);
+        }
+
+        var stopDict = new Dictionary<string, Stop>(newData.Stops.Count);
+        var tripCache = new ConcurrentDictionary<string, IReadOnlyList<Trip>>();
+        var cachedStops = new List<Stop>(newData.Stops.Count);
+
+        foreach (var stop in newData.Stops)
+        {
+            if (stop is null || string.IsNullOrEmpty(stop.Id))
+                continue;
+
+            // Глубокая копия остановки
+            var clonedStop = CloneStop(stop);
+
+            if (!stopDict.TryAdd(stop.Id, clonedStop))
+            {
+                _logger.LogWarning("Duplicate stop ID: {StopId}", stop.Id);
+                continue;
+            }
+
+            cachedStops.Add(clonedStop);
+
+            // Строим кэш по дням
+            if (stop.Schedule is not null)
+            {
+                foreach (var daySchedule in stop.Schedule)
+                {
+                    if (daySchedule?.Trips is null || daySchedule.Trips.Count == 0)
+                        continue;
+
+                    var key = $"{stop.Id}_{daySchedule.Day}";
+                    var tripsCopy = daySchedule.Trips
+                        .Where(t => t is not null)
+                        .Select(t => new Trip
+                        {
+                            Time = t.Time ?? string.Empty,
+                            Bus = t.Bus,
+                            Note = t.Note ?? string.Empty
+                        })
+                        .ToList();
+
+                    if (tripsCopy.Count > 0)
+                    {
+                        tripCache.TryAdd(key, tripsCopy.AsReadOnly());
+                    }
+                }
+            }
+        }
+
+        return (stopDict, tripCache, cachedStops, cachedStops.Count > 0);
+    }
+
+    private static Stop CloneStop(Stop source)
+    {
+        var cloned = new Stop
+        {
+            Id = source.Id,
+            Name = source.Name ?? string.Empty,
+            Schedule = []
+        };
+
+        if (source.Schedule is not null)
+        {
+            foreach (var daySchedule in source.Schedule)
+            {
+                if (daySchedule is null)
+                    continue;
+
+                var clonedDay = new DaySchedule
+                {
+                    Day = daySchedule.Day,
+                    Trips = []
+                };
+
+                if (daySchedule.Trips is not null)
+                {
+                    foreach (var trip in daySchedule.Trips)
+                    {
+                        if (trip is null)
+                            continue;
+
+                        clonedDay.Trips.Add(new Trip
+                        {
+                            Time = trip.Time ?? string.Empty,
+                            Bus = trip.Bus,
+                            Note = trip.Note ?? string.Empty
+                        });
+                    }
+                }
+
+                cloned.Schedule.Add(clonedDay);
+            }
+        }
+
+        return cloned;
+    }
+
+    public bool HasData() => _isLoaded;
     public int StopCount => _cachedStops?.Count ?? 0;
-    public int CachedTripsCount => _tripCache.Count;
+    public int CachedTripsCount => _tripCache?.Count ?? 0;
     public bool IsLoaded => _isLoaded;
 }

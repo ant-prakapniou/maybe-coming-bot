@@ -59,8 +59,9 @@ public class TelegramSender
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 403)
             {
-                _logger.LogWarning(ex, "Bot blocked or chat not found: {ChatId}", chatId);
-                // Не пробрасываем исключение — сообщение не может быть доставлено
+                _logger.LogWarning(ex, "Bot blocked or user not found (403): {ChatId}", chatId);
+                // Не пробрасываем — сообщение не может быть доставлено
+                // ВАЖНО: для critical chatId можно добавить отдельную обработку
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && actualParseMode != ParseMode.None)
             {
@@ -75,7 +76,7 @@ public class TelegramSender
             }
             catch (ApiRequestException ex)
             {
-                _logger.LogError(ex, "Telegram API error for {ChatId}", chatId);
+                _logger.LogError(ex, "Telegram API error for {ChatId} (Code: {ErrorCode})", chatId, ex.ErrorCode);
                 throw; // Пробрасываем для retry-политики
             }
         });

@@ -32,6 +32,7 @@ public class CommandDispatcher(
     private readonly long[] _adminUserIds = settings.Value.AdminUserIds;
     private readonly ILogger<CommandDispatcher> _logger = logger;
 
+    private const string AdminRefreshCallbackData = "admin_refresh";
     private bool IsAdmin(long userId) => _adminUserIds.Contains(userId);
 
     public async Task DispatchCommandAsync(long chatId, long userId, string command, string? args)
@@ -53,7 +54,7 @@ public class CommandDispatcher(
                 return;
 
             case BotCommands.Update:
-                await HandleUpdateAsync(chatId, userId);
+                await HandleAdminRefreshAsync(chatId, userId);
                 return;
 
             case BotCommands.Status:
@@ -103,7 +104,10 @@ public class CommandDispatcher(
     public async Task HandleCallbackAsync(CallbackQuery callbackQuery)
     {
         if (callbackQuery is null || string.IsNullOrEmpty(callbackQuery.Data))
+        {
+            _logger.LogWarning("Callback with null or empty data");
             return;
+        }
 
         var chatId = callbackQuery.Message?.Chat?.Id ?? 0;
         var userId = callbackQuery.From.Id;
@@ -117,13 +121,23 @@ public class CommandDispatcher(
             return;
         }
 
-        if (data == "admin_refresh")
+        // Обработка системных callback
+        if (data == AdminRefreshCallbackData)
         {
             await HandleAdminRefreshAsync(chatId, userId);
             return;
         }
 
-        var stopId = data.Split('|')[0];
+        // Парсинг stopId
+        var parts = data.Split('|', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            _logger.LogWarning("Invalid callback data format: {Data}", data);
+            await _sender.SendAsync(chatId, "⚠️ INVALID DATA. USE /start.");
+            return;
+        }
+
+        var stopId = parts[0];
         var stop = _storage.GetStop(stopId);
 
         if (stop is null)
@@ -150,7 +164,7 @@ public class CommandDispatcher(
             if (IsAdmin(userId))
             {
                 var adminKeyboard = new InlineKeyboardMarkup(
-                    InlineKeyboardButton.WithCallbackData("🔄 REFRESH", "admin_refresh"));
+                    InlineKeyboardButton.WithCallbackData("🔄 REFRESH", AdminRefreshCallbackData));
                 await _sender.SendAsync(chatId, "⚠️ SCHEDULE NOT LOADED. PRESS TO REFRESH:", replyMarkup: adminKeyboard);
                 return;
             }
@@ -168,7 +182,7 @@ public class CommandDispatcher(
         await _sender.SendAsync(chatId, BotMessages.Welcome, replyMarkup: stopKeyboard);
     }
 
-    private async Task HandleUpdateAsync(long chatId, long userId)
+    private async Task HandleAdminRefreshAsync(long chatId, long userId)
     {
         if (!IsAdmin(userId))
         {
@@ -182,7 +196,18 @@ public class CommandDispatcher(
         try
         {
             await _refreshService.ForceRefreshAsync();
-            await _sender.SendAsync(chatId, $"{BotMessages.UpdateSuccess} STOPS: {_storage.StopCount}");
+            var stops = _storage.GetAllStops().ToList();
+
+            if (stops.Count == 0)
+            {
+                await _sender.SendAsync(chatId, "⚠️ UPDATED BUT NO STOPS.");
+                return;
+            }
+
+            var keyboard = new InlineKeyboardMarkup(
+                stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
+
+            await _sender.SendAsync(chatId, $"{BotMessages.UpdateSuccess} {stops.Count} STOPS.\n\nSELECT STOP:", replyMarkup: keyboard);
         }
         catch (Exception ex)
         {
@@ -245,39 +270,6 @@ public class CommandDispatcher(
             chatId,
             BotMessages.ReportInstructions($"tg://user?id={firstAdminId}"),
             ParseMode.Markdown);
-    }
-
-    private async Task HandleAdminRefreshAsync(long chatId, long userId)
-    {
-        if (!IsAdmin(userId))
-        {
-            await _sender.SendAsync(chatId, BotMessages.NoRights);
-            return;
-        }
-
-        await _sender.SendAsync(chatId, BotMessages.UpdateLoading);
-
-        try
-        {
-            await _refreshService.ForceRefreshAsync();
-            var stops = _storage.GetAllStops().ToList();
-
-            if (stops.Count == 0)
-            {
-                await _sender.SendAsync(chatId, "⚠️ UPDATED BUT NO STOPS.");
-                return;
-            }
-
-            var keyboard = new InlineKeyboardMarkup(
-                stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
-
-            await _sender.SendAsync(chatId, $"✅ UPDATED. {stops.Count} STOPS.\n\nSELECT STOP:", replyMarkup: keyboard);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Admin refresh failed");
-            await _sender.SendAsync(chatId, BotMessages.UpdateFailed);
-        }
     }
 
     private static ReplyKeyboardMarkup GetMainKeyboard()

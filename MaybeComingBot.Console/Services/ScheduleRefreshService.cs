@@ -98,7 +98,8 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Refresh loop error");
-                throw;
+                // Не вылетаем, продолжаем попытки
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
             }
         }
     }
@@ -176,10 +177,13 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
         if (failureCount <= 0)
             return TimeSpan.FromHours(_intervalHours);
 
-        int backoff = failureCount > MaxBackoffFailureCount
+        // Безопасный расчет backoff через Math.Pow
+        var backoffMinutes = failureCount > MaxBackoffFailureCount
             ? TimeConstants.MaxRetryDelayMinutes
-            : Math.Min(TimeConstants.BaseRetryDelayMinutes * (1 << (failureCount - 1)), TimeConstants.MaxRetryDelayMinutes);
+            : (int)Math.Min(
+                TimeConstants.BaseRetryDelayMinutes * Math.Pow(2, failureCount - 1),
+                TimeConstants.MaxRetryDelayMinutes);
 
-        return TimeSpan.FromMinutes(backoff);
+        return TimeSpan.FromMinutes(backoffMinutes);
     }
 }
