@@ -32,7 +32,6 @@ try
         .UseSerilog()
         .ConfigureServices((context, services) =>
         {
-            // ✅ ОДНА регистрация через метод расширения
             services.AddBotServices(context.Configuration);
         })
         .Build();
@@ -43,8 +42,8 @@ try
     await ValidateConfigurationAndAdminAsync(host);
     await RunBotWithRestartAsync(host);
 
+    // Остановка хоста с таймаутом
     await host.StopAsync(TimeSpan.FromSeconds(30));
-    await host.WaitForShutdownAsync();
 }
 catch (Exception ex)
 {
@@ -98,7 +97,7 @@ static async Task RunBotWithRestartAsync(IHost host)
     var logger = host.Services.GetRequiredService<ILogger<Program>>();
     var botClient = host.Services.GetRequiredService<ITelegramBotClient>();
     var handler = host.Services.GetRequiredService<BotHandler>();
-    var lifetime = host.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+    var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
     var receiverOptions = new ReceiverOptions
     {
@@ -114,10 +113,10 @@ static async Task RunBotWithRestartAsync(IHost host)
         CancellationToken.None
     );
 
-    // Регистрируем отмену через Ctrl+C
+    // ✅ ИСПРАВЛЕНО: Добавлен e.Cancel = true
     Console.CancelKeyPress += (s, e) =>
     {
-        // Убираем e.Cancel = true, чтобы не блокировать завершение
+        e.Cancel = true;
         logger.LogInformation("Shutdown requested...");
         cts.Cancel();
     };
@@ -153,7 +152,6 @@ static async Task RunBotWithRestartAsync(IHost host)
                 cancellationToken: cts.Token
             );
 
-            // Если ReceiveAsync завершился без исключения (нормально), сбрасываем счётчик
             restartAttempts = 0;
         }
         catch (OperationCanceledException)
@@ -170,7 +168,7 @@ static async Task RunBotWithRestartAsync(IHost host)
             if (restartAttempts >= maxRestartAttempts)
             {
                 logger.LogCritical("❌ Maximum restart attempts reached. Bot will not restart.");
-                throw; // Пробрасываем исключение дальше, чтобы остановить хост
+                throw;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(10 * restartAttempts), cts.Token);

@@ -19,8 +19,8 @@ public class BotSettings
     [Range(0, 168, ErrorMessage = "UpdateIntervalHours must be between 0 and 168 (7 days)")]
     public int UpdateIntervalHours { get; set; } = 24;
 
-    [Range(1, 24, ErrorMessage = "UserStateTtlHours must be between 1 and 24")]
-    public int UserStateTtlHours { get; set; } = 2;
+    [Range(1, 48, ErrorMessage = "UserStateTtlHours must be between 1 and 48")]
+    public int UserStateTtlHours { get; set; } = 48;
 
     [Range(1, 20, ErrorMessage = "RateLimitMaxRequests must be between 1 and 20")]
     public int RateLimitMaxRequests { get; set; } = 5;
