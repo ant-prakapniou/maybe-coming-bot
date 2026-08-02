@@ -27,9 +27,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user (UID 1654 is the conventional container user).
-RUN useradd --create-home --uid 1654 appuser
-
 WORKDIR /app
 
 # Copy the published application.
@@ -38,11 +35,12 @@ COPY --from=build /app/publish ./
 # Ship a base configuration file; real values come from environment variables.
 COPY MaybeComingBot.Console/appsettings.Template.json ./appsettings.json
 
-# Writable logs directory for the Serilog file sink.
+# Writable logs directory for the Serilog file sink. The aspnet base image
+# already defines a non-root "app" user (UID 1654), so we use it directly.
 RUN mkdir -p /app/logs \
-    && chown -R appuser:appuser /app
+    && chown -R app:app /app
 
-USER appuser
+USER app
 
 # Health-server port. Railway overrides PORT automatically for web services.
 ENV PORT=8080
