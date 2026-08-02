@@ -219,7 +219,7 @@ dotnet publish MaybeComingBot.Console/MaybeComingBot.csproj -c Release -r win-x6
 
 A `Dockerfile` (multi-stage, `sdk:10.0` → `aspnet:10.0`) and `railway.json` are included at the repo root. The image:
 
-- Ships a base `appsettings.json` copied from `appsettings.Template.json`.
+- Starts with an empty `appsettings.json` (`{}`); all configuration is provided via environment variables (`BotSettings__*` prefix). The `appsettings.Template.json` file is kept in the repository for local development and documentation purposes only.
 - Runs as the built-in **non-root** `app` user (`UID 1654`) from the `aspnet` base image.
 - Installs `tzdata` (timezone data for local-time formatting) — override the timezone with the `TZ` env var (e.g. `Europe/Berlin`).
 - Exposes an HTTP health endpoint on the `PORT` env var (default `8080`) at `GET /health`, served by a lightweight **ASP.NET Core (Kestrel)** minimal API running as a background service, so Railway can run it as a **Web Service**. Healthy or degraded bot states return `200`; unhealthy returns `503`. The Telegram polling loop runs independently and is unaffected by the health endpoint.

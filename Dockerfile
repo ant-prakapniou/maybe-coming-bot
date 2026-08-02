@@ -32,8 +32,10 @@ WORKDIR /app
 # Copy the published application.
 COPY --from=build /app/publish ./
 
-# Ship a base configuration file; real values come from environment variables.
-COPY MaybeComingBot.Console/appsettings.Template.json ./appsettings.json
+# Start with an empty configuration; all real values come from environment variables
+# (BotSettings__* prefix). appsettings.Template.json is kept in the repository for
+# local development and documentation purposes only.
+RUN echo "{}" > ./appsettings.json
 
 # Writable logs directory for the Serilog file sink. The aspnet base image
 # already defines a non-root "app" user (UID 1654), so we use it directly.
