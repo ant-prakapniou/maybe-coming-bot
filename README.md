@@ -113,7 +113,7 @@ All settings live under the `BotSettings` section.
 |---|---|---|---|
 | `BotToken` | string | — | Telegram bot token (required, ≥10 chars). |
 | `ScheduleUrl` | string | — | Absolute URL of the schedule JSON (required). |
-| `AdminUserIds` | long[] | — | At least one admin Telegram user ID (required). |
+| `AdminUserIds` | long[] | — | At least one admin Telegram user ID (required). **Important:** When using environment variables, multiple IDs must be passed as indexed variables (e.g., `BotSettings__AdminUserIds__0`, `BotSettings__AdminUserIds__1`, …). A single-line array value like `BotSettings__AdminUserIds=[1,2,3]` does **not** work reliably with `AddEnvironmentVariables()` in .NET. |
 | `SupportUsername` | string | — | Optional public Telegram username (without `@`) shown to users as the admin contact link. When omitted, no contact link is rendered (users are guided to `/report`). |
 | `UpdateIntervalHours` | int | 24 | Hours between automatic schedule refreshes; `0` disables auto-update (0–168). |
 | `UserStateTtlHours` | int | 48 | Inactivity TTL for user sessions (1–48). Should be ≥ `UpdateIntervalHours`. |
@@ -235,6 +235,8 @@ Required environment variables (set them in Railway → Variables, never in `app
 | `BotSettings__SupportUsername` | Optional admin username (no `@`) |
 | `PORT` | Set automatically by Railway (do not change) |
 | `TZ` | Optional IANA timezone, e.g. `Europe/Berlin` |
+
+> **⚠️ Important — Admin IDs must use indexed variables.** .NET's `AddEnvironmentVariables()` does **not** reliably parse a single-line array value like `BotSettings__AdminUserIds=[6176661225]`. You **must** use separate indexed variables: `BotSettings__AdminUserIds__0=6176661225`, `BotSettings__AdminUserIds__1=...`, etc. Add one variable per admin ID in the Railway dashboard.
 
 Optional tuning variables use the same `BotSettings__*` prefix (see the [Configuration reference](#configuration-reference)).
 
