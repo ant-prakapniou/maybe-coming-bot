@@ -8,15 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Brings in ASP.NET Core (Kestrel, minimal APIs) for the lightweight
+         /health endpoint without switching the app to Microsoft.NET.Sdk.Web. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Packages NOT part of the Microsoft.AspNetCore.App shared framework
+         (the framework reference above supplies Hosting/DI/Configuration,
+         Logging, Http, Options.DataAnnotations and HealthChecks). -->
     <PackageReference Include="Microsoft.Agents.Builder" Version="1.7.123" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.10" />
     <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />

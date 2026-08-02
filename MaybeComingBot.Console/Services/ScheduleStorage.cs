@@ -24,6 +24,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
     private Dictionary<string, IReadOnlyList<Trip>> _tripCache = [];
     private IReadOnlyList<Stop> _cachedStops = [];
     private bool _isLoaded;
+    private DateTime _lastUpdated = DateTime.MinValue;
 
     private readonly ILogger<ScheduleStorage> _logger;
     private readonly ReaderWriterLockSlim _rwLock = new();
@@ -124,6 +125,11 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
             _cachedStops = newCachedStops;
             _data = newData;
             _isLoaded = hasData;
+
+            // Stamp freshness inside the write lock so readers always observe a
+            // timestamp consistent with the data that was just stored.
+            if (hasData)
+                _lastUpdated = DateTime.UtcNow;
         }
         finally
         {
@@ -310,6 +316,23 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
         }
     }
 
+    /// <inheritdoc/>
+    public DateTime LastUpdated
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _lastUpdated;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
+
     /// <summary>
     /// Clears all schedule data from storage.
     /// </summary>
@@ -323,6 +346,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
             _tripCache = new Dictionary<string, IReadOnlyList<Trip>>();
             _cachedStops = EmptyStops;
             _isLoaded = false;
+            _lastUpdated = DateTime.MinValue;
             _logger.LogDebug("ScheduleStorage cleared");
         }
         finally

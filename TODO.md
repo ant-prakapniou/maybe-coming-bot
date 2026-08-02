@@ -1,16 +1,14 @@
-# MaybeComingBot — Railway (Docker) Deployment
+# MaybeComingBot — ASP.NET Core Health Endpoint Migration
 
 ## Goals
-- [x] Create a multi-stage `Dockerfile` (.NET 10 sdk → runtime) for Railway.
-- [x] Add `.dockerignore` to keep secrets/build artifacts out of the image.
-- [x] Add `railway.json` (Dockerfile builder, restart policy, healthcheck path).
-- [x] Add a minimal HTTP `/health` endpoint (`HealthHttpServer`) so Railway runs the bot as a Web Service.
-- [x] Register the health server as a hosted service in `ServiceCollectionExtensions`.
-- [x] Update `README.md` Deployment section with Railway env vars and steps.
-- [x] Verify: `dotnet build` — 0 errors/warnings.
-- [x] Verify: `dotnet test` — all 201 pass, 0 failed.
-
-## Notes
-- Docker is not installed locally, so the image itself was not built locally; the code is validated via `dotnet build`/`dotnet test` on the installed .NET 10 SDK.
-- The bot ships `appsettings.Template.json` as `appsettings.json`; all real values come from Railway variables (`BotSettings__*`).
+- [x] Gather context (csproj, Dockerfile, Program.cs, ServiceCollectionExtensions, HealthHttpServer, railway.json, README).
+- [x] Add `<FrameworkReference Include="Microsoft.AspNetCore.App" />` to `MaybeComingBot.Console/MaybeComingBot.csproj`.
+- [x] Switch the Dockerfile runtime stage from `runtime:10.0` to `aspnet:10.0`.
+- [x] Rewrite `MaybeComingBot.Console/Health/HealthHttpServer.cs` as a lightweight `WebApplication` (Kestrel) background service.
+- [x] Update `README.md` Deployment section to mention the ASP.NET Core (Kestrel) health endpoint.
+- [x] Verify: `dotnet build MaybeComingBot.slnx` — 0 errors/warnings (build blocked only by a running bot instance locking MaybeComingBot.exe; main project compiles clean).
+- [x] Verify: `dotnet test MaybeComingBot.Tests` — 205 passed, 0 failed.
+- [x] Move schedule freshness tracking into `ScheduleStorage` (`LastUpdated` set inside `Update`).
+- [x] `BotHealthCheck` now reads `_storage.LastUpdated` as the single source of truth.
+- [x] Added 4 `LastUpdated` tests to `ScheduleStorageTests`.
 

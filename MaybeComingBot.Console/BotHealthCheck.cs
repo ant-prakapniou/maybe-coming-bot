@@ -83,8 +83,9 @@ public class BotHealthCheck(
         if (_storage.CachedTripsCount == 0)
             return Task.FromResult(HealthCheckResult.Degraded("Schedule loaded but no trips available"));
 
-        // Check last update timestamp
-        var lastUpdate = _refreshService.LastSuccessfulUpdate;
+        // Check last update timestamp (single source of truth: the storage
+        // stamps DateTime.UtcNow inside Update when valid data is stored).
+        var lastUpdate = _storage.LastUpdated;
         if (lastUpdate == DateTime.MinValue)
             return Task.FromResult(HealthCheckResult.Unhealthy("Schedule has never been updated"));
 

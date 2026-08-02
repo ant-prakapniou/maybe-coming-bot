@@ -1,34 +1,33 @@
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Serilog;
 
 namespace MaybeComingBot.Health;
 
 /// <summary>
-/// Minimal, dependency-free HTTP health-check server for container platforms
-/// such as Railway. Binds a <see cref="TcpListener"/> to the <c>PORT</c>
-/// environment variable (default 8080) and answers <c>GET /health</c> (plus
-/// <c>/healthz</c> and <c>/</c>) with the current bot health status.
+/// Lightweight ASP.NET Core (Kestrel) health-check endpoint for container platforms
+/// such as Railway. Runs a minimal <see cref="WebApplication"/> bound to the <c>PORT</c>
+/// environment variable (default 8080) and answers <c>GET /health</c> (plus <c>/healthz</c>
+/// and <c>/</c>) with the current bot health status.
 /// </summary>
 /// <remarks>
-/// The app is a console worker, not an ASP.NET host, so this small listener
-/// avoids pulling in the full ASP.NET framework. It uses only base-runtime
-/// types and works on both Windows (local dev) and Linux (containers).
-/// If the port cannot be bound, the bot logs a warning and keeps running.
+/// The app is a console worker, not an ASP.NET host, so this <see cref="BackgroundService"/>
+/// hosts a small Kestrel <see cref="WebApplication"/> in the background without disturbing
+/// the Telegram polling loop. Healthy or degraded states return HTTP 200; unhealthy returns
+/// 503. If the port cannot be bound, the bot logs a warning and keeps running.
 /// </remarks>
 public class HealthHttpServer(
     HealthCheckService healthCheckService,
     ILogger<HealthHttpServer> logger) : BackgroundService
 {
     private const int DefaultPort = 8080;
-    private const int MaxHeaderBytes = 16 * 1024;
-
-    private static readonly byte[] NotFoundBody = Encoding.UTF8.GetBytes("Not Found");
-    private static readonly byte[] HeaderTooLargeBody = Encoding.UTF8.GetBytes("Request Header Fields Too Large");
 
     private readonly HealthCheckService _healthCheckService = healthCheckService;
     private readonly ILogger<HealthHttpServer> _logger = logger;
@@ -37,182 +36,85 @@ public class HealthHttpServer(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var port = GetPort();
-        TcpListener? listener = null;
+        var urls = $"http://0.0.0.0:{port}";
+
+        WebApplication app;
+        try
+        {
+            var builder = WebApplication.CreateSlimBuilder();
+
+            // Route Kestrel logs through the same Serilog pipeline as the bot.
+            builder.Logging.ClearProviders();
+            builder.Logging.AddSerilog(Log.Logger);
+            builder.WebHost.UseUrls(urls);
+
+            // Reuse the outer generic host's HealthCheckService so the BotHealthCheck
+            // registered by AddBotServices is evaluated by this minimal app too.
+            builder.Services.AddSingleton(_healthCheckService);
+
+            app = builder.Build();
+
+            var healthCheckOptions = new HealthCheckOptions
+            {
+                ResponseWriter = WriteHealthReportAsync
+            };
+
+            app.MapHealthChecks("/health", healthCheckOptions);
+            app.MapHealthChecks("/healthz", healthCheckOptions);
+            app.MapHealthChecks("/", healthCheckOptions);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to build the health server. The bot will continue running " +
+                "without an HTTP endpoint.");
+            return;
+        }
 
         try
         {
-            listener = new TcpListener(IPAddress.Any, port);
-            listener.Start();
-            _logger.LogInformation("🩺 Health server listening on port {Port}", port);
+            _logger.LogInformation("🩺 Health server starting on port {Port}", port);
+            await app.RunAsync(stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown.
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Failed to start health server on port {Port}. The bot will continue running " +
                 "without an HTTP endpoint (set PORT to a free port to enable it).", port);
-            return;
-        }
-
-        try
-        {
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                Socket socket;
-                try
-                {
-                    socket = await listener.Server.AcceptAsync(stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                catch (SocketException ex)
-                {
-                    _logger.LogDebug(ex, "Health server accept failed");
-                    continue;
-                }
-
-                var client = new TcpClient { Client = socket };
-                _ = Task.Run(() => HandleClientAsync(client, stoppingToken), stoppingToken);
-            }
         }
         finally
         {
-            listener.Stop();
+            await app.DisposeAsync();
             _logger.LogInformation("Health server stopped");
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, CancellationToken ct)
+    /// <summary>
+    /// Writes the health report as JSON in the same shape as the original
+    /// listener-based implementation: lowercase status plus per-check details.
+    /// </summary>
+    private static async Task WriteHealthReportAsync(HttpContext context, HealthReport report)
     {
-        using (client)
-        using (var stream = client.GetStream())
+        context.Response.ContentType = "application/json";
+
+        var body = JsonSerializer.Serialize(new
         {
-            try
-            {
-                var headerBytes = new List<byte>(256);
-                var buffer = new byte[1024];
-                var headerEnd = -1;
-
-                while (headerEnd < 0)
+            status = report.Status.ToString().ToLowerInvariant(),
+            checks = report.Entries.ToDictionary(
+                entry => entry.Key,
+                entry => new
                 {
-                    var read = await stream.ReadAsync(buffer, ct);
-                    if (read == 0)
-                        return;
+                    status = entry.Value.Status.ToString().ToLowerInvariant(),
+                    description = entry.Value.Description,
+                    data = entry.Value.Data
+                })
+        });
 
-                    headerBytes.AddRange(buffer[..read]);
-
-                    if (headerBytes.Count > MaxHeaderBytes)
-                    {
-                        await WriteAsync(stream, BuildResponse(
-                            431, "Request Header Fields Too Large", "text/plain", HeaderTooLargeBody), ct);
-                        return;
-                    }
-
-                    headerEnd = FindHeaderEnd(headerBytes);
-                }
-
-                var requestLine = GetRequestLine(headerBytes);
-                var path = GetPath(requestLine);
-
-                if (path is "/health" or "/healthz" or "/")
-                {
-                    var result = await _healthCheckService.CheckHealthAsync(ct);
-                    var isUp = result.Status is HealthStatus.Healthy or HealthStatus.Degraded;
-                    var statusCode = isUp ? 200 : 503;
-
-                    var body = JsonSerializer.Serialize(new
-                    {
-                        status = result.Status.ToString().ToLowerInvariant(),
-                        checks = result.Entries?.ToDictionary(
-                            entry => entry.Key,
-                            entry => new
-                            {
-                                status = entry.Value.Status.ToString().ToLowerInvariant(),
-                                description = entry.Value.Description,
-                                data = entry.Value.Data
-                            })
-                    });
-
-                    var bodyBytes = Encoding.UTF8.GetBytes(body);
-                    await WriteAsync(stream, BuildResponse(
-                        statusCode,
-                        isUp ? "OK" : "Service Unavailable",
-                        "application/json",
-                        bodyBytes), ct);
-                }
-                else
-                {
-                    await WriteAsync(stream, BuildResponse(404, "Not Found", "text/plain", NotFoundBody), ct);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Shutdown in progress.
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Health request handling failed");
-            }
-        }
-    }
-
-    private static async Task WriteAsync(NetworkStream stream, byte[] response, CancellationToken ct)
-    {
-        await stream.WriteAsync(response, ct);
-        stream.Close();
-    }
-
-    private static byte[] BuildResponse(int statusCode, string reason, string contentType, byte[] body)
-    {
-        var header = $"HTTP/1.1 {statusCode} {reason}\r\n" +
-                     $"Content-Type: {contentType}\r\n" +
-                     $"Content-Length: {body.Length}\r\n" +
-                     "Connection: close\r\n\r\n";
-        var headerBytes = Encoding.ASCII.GetBytes(header);
-
-        var response = new byte[headerBytes.Length + body.Length];
-        Buffer.BlockCopy(headerBytes, 0, response, 0, headerBytes.Length);
-        Buffer.BlockCopy(body, 0, response, headerBytes.Length, body.Length);
-        return response;
-    }
-
-    private static int FindHeaderEnd(List<byte> bytes)
-    {
-        for (var i = 0; i <= bytes.Count - 4; i++)
-        {
-            if (bytes[i] == (byte)'\r' && bytes[i + 1] == (byte)'\n' &&
-                bytes[i + 2] == (byte)'\r' && bytes[i + 3] == (byte)'\n')
-            {
-                return i + 4;
-            }
-        }
-        return -1;
-    }
-
-    private static string GetRequestLine(List<byte> headerBytes)
-    {
-        var end = headerBytes.IndexOf((byte)'\r');
-        if (end < 0)
-            end = headerBytes.Count;
-        return Encoding.ASCII.GetString(headerBytes.ToArray(), 0, end);
-    }
-
-    private static string GetPath(string requestLine)
-    {
-        var parts = requestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
-            return "/";
-
-        var path = parts[1];
-        var queryIndex = path.IndexOf('?');
-        if (queryIndex >= 0)
-            path = path[..queryIndex];
-        return path;
+        await context.Response.WriteAsync(body, context.RequestAborted);
     }
 
     private static int GetPort()

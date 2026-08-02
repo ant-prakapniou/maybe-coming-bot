@@ -20,7 +20,7 @@ RUN dotnet publish MaybeComingBot.Console/MaybeComingBot.csproj \
 # ------------------------------------------------------------------
 # Runtime stage
 # ------------------------------------------------------------------
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 
 # Install tzdata so .NET timezone APIs (used for status timestamps) work.
 RUN apt-get update \

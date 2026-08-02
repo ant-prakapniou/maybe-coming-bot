@@ -92,4 +92,17 @@ public interface IScheduleStorage
     /// It does not guarantee that data is present or valid.
     /// </remarks>
     bool IsLoaded { get; }
+
+    /// <summary>
+    /// Gets the UTC timestamp of the last successful schedule update.
+    /// </summary>
+    /// <value>
+    /// The UTC time when <see cref="Update"/> was last called with valid data,
+    /// or <see cref="DateTime.MinValue"/> if never updated.
+    /// </value>
+    /// <remarks>
+    /// Set automatically inside <see cref="Update"/> when the new data is non-empty.
+    /// This is the single source of truth for schedule freshness used by health checks.
+    /// </remarks>
+    DateTime LastUpdated { get; }
 }

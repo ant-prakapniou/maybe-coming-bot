@@ -90,6 +90,66 @@ public class ScheduleStorageTests
     }
 
     // ============================================================
+    // LastUpdated Tests
+    // ============================================================
+
+    [Fact]
+    public void LastUpdated_BeforeUpdate_ReturnsMinValue()
+    {
+        // Act
+        var lastUpdated = _storage.LastUpdated;
+
+        // Assert
+        lastUpdated.Should().Be(DateTime.MinValue);
+    }
+
+    [Fact]
+    public void Update_WithValidData_SetsLastUpdatedToUtcNow()
+    {
+        // Arrange
+        var data = CreateScheduleRoot();
+        var before = DateTime.UtcNow;
+
+        // Act
+        _storage.Update(data);
+
+        // Assert
+        _storage.LastUpdated.Should().BeAfter(before);
+        _storage.LastUpdated.Kind.Should().Be(DateTimeKind.Utc);
+        _storage.LastUpdated.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Update_WithEmptyData_DoesNotAdvanceLastUpdated()
+    {
+        // Arrange
+        var data = CreateScheduleRoot();
+        _storage.Update(data);
+        var lastUpdatedAfterValid = _storage.LastUpdated;
+
+        // Act
+        _storage.Update(new ScheduleRoot());
+
+        // Assert
+        _storage.LastUpdated.Should().Be(lastUpdatedAfterValid);
+    }
+
+    [Fact]
+    public void Clear_ResetsLastUpdatedToMinValue()
+    {
+        // Arrange
+        var data = CreateScheduleRoot();
+        _storage.Update(data);
+        _storage.LastUpdated.Should().NotBe(DateTime.MinValue);
+
+        // Act
+        _storage.Clear();
+
+        // Assert
+        _storage.LastUpdated.Should().Be(DateTime.MinValue);
+    }
+
+    // ============================================================
     // GetAllStops Tests
     // ============================================================
 
