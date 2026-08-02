@@ -120,26 +120,6 @@ public static class PollyPolicyExtensions
     }
 
     /// <summary>
-    /// Creates a combined policy that wraps retry and timeout policies.
-    /// </summary>
-    /// <param name="settings">The bot settings containing all policy configuration.</param>
-    /// <returns>
-    /// A combined asynchronous policy for <see cref="HttpResponseMessage"/>.
-    /// </returns>
-    /// <remarks>
-    /// The combined policy applies retry logic first, with timeout enforcement
-    /// at each retry attempt. This ensures individual attempts don't exceed
-    /// the configured timeout limit.
-    /// </remarks>
-    public static IAsyncPolicy<HttpResponseMessage> GetCombinedPolicy(
-        IOptions<BotSettings> settings)
-    {
-        return Policy.WrapAsync(
-            GetRetryPolicy(settings),
-            GetTimeoutPolicy(settings));
-    }
-
-    /// <summary>
     /// Retrieves an ILogger from the Polly context or returns NullLogger if not found.
     /// </summary>
     /// <param name="context">The Polly execution context.</param>
@@ -148,7 +128,7 @@ public static class PollyPolicyExtensions
     /// </returns>
     private static ILogger GetLoggerOrDefault(this Context context)
     {
-        if (context.TryGetLogger(out var logger))
+        if (context.TryGetLogger(out var logger) && logger is not null)
             return logger;
 
         return NullLogger.Instance;

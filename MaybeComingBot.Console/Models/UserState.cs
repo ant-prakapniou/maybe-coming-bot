@@ -30,18 +30,6 @@ public sealed class UserState
     public DateTime LastActivity { get; set; } = DateTime.UtcNow;
 
     /// <summary>
-    /// Gets or sets the total number of commands executed by this user.
-    /// </summary>
-    /// <value>
-    /// An integer representing the command count. Starts at 0.
-    /// </value>
-    /// <remarks>
-    /// Useful for analytics and understanding user engagement.
-    /// Reset by calling <see cref="ResetCommandCount"/>.
-    /// </remarks>
-    public int CommandCount { get; set; }
-
-    /// <summary>
     /// Gets or sets the user's first name.
     /// </summary>
     /// <value>
@@ -74,28 +62,4 @@ public sealed class UserState
     /// </remarks>
     public string Username { get; set; } = string.Empty;
 
-    /// <summary>
-    /// Increments the command count and updates the last activity timestamp.
-    /// </summary>
-    /// <remarks>
-    /// This method should be called on every user interaction to maintain accurate activity tracking.
-    /// The <see cref="LastActivity"/> property is updated to the current UTC time.
-    /// </remarks>
-    public void IncrementCommandCount()
-    {
-        CommandCount++;
-        LastActivity = DateTime.UtcNow;
-    }
-
-    /// <summary>
-    /// Resets the command count to zero.
-    /// </summary>
-    /// <remarks>
-    /// The <see cref="LastActivity"/> property is not modified by this method.
-    /// Useful for analytics resets or when clearing user session data.
-    /// </remarks>
-    public void ResetCommandCount()
-    {
-        CommandCount = 0;
-    }
 }

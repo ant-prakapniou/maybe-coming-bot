@@ -83,9 +83,7 @@ public sealed class Stop
     /// The <see cref="DaySchedule"/> if found; otherwise, <c>null</c>.
     /// </returns>
     public DaySchedule? GetScheduleForDay(int day)
-    {
-        return Schedule.FirstOrDefault(s => s.Day == day);
-    }
+        => Schedule.FirstOrDefault(s => s.Day == day);
 
     /// <summary>
     /// Determines whether the stop has any trips scheduled on a specific day.
@@ -95,9 +93,7 @@ public sealed class Stop
     /// <c>true</c> if there is at least one trip on the specified day; otherwise, <c>false</c>.
     /// </returns>
     public bool HasTripsOnDay(int day)
-    {
-        return Schedule.Any(s => s.Day == day && s.Trips.Count > 0);
-    }
+        => Schedule.Any(s => s.Day == day && s.Trips.Count > 0);
 
     /// <summary>
     /// Adds a day schedule to the stop.
@@ -107,7 +103,6 @@ public sealed class Stop
     public void AddSchedule(DaySchedule daySchedule)
     {
         ArgumentNullException.ThrowIfNull(daySchedule);
-
         Schedule.Add(daySchedule);
     }
 
@@ -118,7 +113,5 @@ public sealed class Stop
     /// A string containing the stop name and ID (e.g., "Central Station (ST001)").
     /// </returns>
     public override string ToString()
-    {
-        return $"{Name} ({Id})";
-    }
+        => $"{Name} ({Id})";
 }

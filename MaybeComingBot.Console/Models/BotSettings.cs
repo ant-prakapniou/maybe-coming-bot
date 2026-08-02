@@ -66,6 +66,40 @@ public class BotSettings
         set => _adminUserIds = value ?? [];
     }
 
+    private string? _supportUsername;
+
+    /// <summary>
+    /// Gets or sets the public Telegram username (without the leading "@") used
+    /// to let users contact the administrator.
+    /// </summary>
+    /// <value>
+    /// A string containing the admin's Telegram username (e.g., "support_admin").
+    /// Optional — when omitted, the bot does not render a contact link.
+    /// </value>
+    /// <remarks>
+    /// This is the privacy-safe alternative to exposing a numeric Telegram user ID.
+    /// The value is normalized: leading "@" and surrounding whitespace are stripped.
+    /// </remarks>
+    public string SupportUsername
+    {
+        get => NormalizeUsername(_supportUsername);
+        set => _supportUsername = value ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Normalizes a Telegram username by trimming whitespace and stripping a leading "@".
+    /// </summary>
+    /// <param name="username">The raw username value.</param>
+    /// <returns>A normalized username, or an empty string if <paramref name="username"/> is null/empty.</returns>
+    private static string NormalizeUsername(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return string.Empty;
+
+        var trimmed = username.Trim();
+        return trimmed.StartsWith('@') ? trimmed[1..] : trimmed;
+    }
+
     /// <summary>
     /// Gets or sets the interval between automatic schedule updates.
     /// </summary>
@@ -176,33 +210,4 @@ public class BotSettings
     /// </remarks>
     public bool AutoUpdateEnabled => UpdateIntervalHours > 0;
 
-    /// <summary>
-    /// Validates the settings and performs additional cross-property validation.
-    /// </summary>
-    /// <exception cref="ValidationException">
-    /// Thrown when validation fails for any of the following conditions:
-    /// <list type="bullet">
-    /// <item><description>Rate limit is too aggressive (MaxRequests > 10 and Window < 2 minutes)</description></item>
-    /// <item><description>UserStateTtlHours is less than UpdateIntervalHours (when auto-update is enabled)</description></item>
-    /// </list>
-    /// </exception>
-    /// <remarks>
-    /// This method should be called after binding configuration to ensure all settings are logically consistent.
-    /// </remarks>
-    public void Validate()
-    {
-        if (RateLimitMaxRequests > 10 && RateLimitWindowMinutes < 2)
-        {
-            throw new ValidationException(
-                $"Rate limit is too aggressive: MaxRequests={RateLimitMaxRequests} with Window={RateLimitWindowMinutes}min. " +
-                "Consider reducing MaxRequests or increasing Window.");
-        }
-
-        if (UserStateTtlHours < UpdateIntervalHours && UpdateIntervalHours > 0)
-        {
-            throw new ValidationException(
-                $"UserStateTtlHours ({UserStateTtlHours}h) should be greater than UpdateIntervalHours ({UpdateIntervalHours}h) " +
-                "to prevent user state loss during schedule updates.");
-        }
-    }
 }

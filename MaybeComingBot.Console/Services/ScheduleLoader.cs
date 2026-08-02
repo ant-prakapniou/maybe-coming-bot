@@ -1,7 +1,6 @@
 ﻿using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace MaybeComingBot.Services;
@@ -14,10 +13,14 @@ namespace MaybeComingBot.Services;
 /// from the configured URL. It includes timeout handling, error logging,
 /// and detailed diagnostics for monitoring performance.
 /// </remarks>
-public class ScheduleLoader
+/// <param name="httpClientFactory">The HTTP client factory for creating HTTP clients.</param>
+/// <param name="logger">The logger instance for this class.</param>
+public class ScheduleLoader(
+    IHttpClientFactory httpClientFactory,
+    ILogger<ScheduleLoader> logger)
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<ScheduleLoader> _logger;
+    private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
+    private readonly ILogger<ScheduleLoader> _logger = logger;
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
     private const string HttpClientName = nameof(ScheduleLoader);
 
@@ -32,19 +35,6 @@ public class ScheduleLoader
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ScheduleLoader"/> class.
-    /// </summary>
-    /// <param name="httpClientFactory">The HTTP client factory for creating HTTP clients.</param>
-    /// <param name="logger">The logger instance for this class.</param>
-    public ScheduleLoader(
-        IHttpClientFactory httpClientFactory,
-        ILogger<ScheduleLoader> logger)
-    {
-        _httpClientFactory = httpClientFactory;
-        _logger = logger;
-    }
 
     /// <summary>
     /// Loads schedule data from the configured URL.
@@ -76,7 +66,7 @@ public class ScheduleLoader
     /// for proper handling by the caller.
     /// </para>
     /// </remarks>
-    public async Task<ScheduleRoot> LoadAsync(CancellationToken cancellationToken = default)
+    public virtual async Task<ScheduleRoot> LoadAsync(CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -149,7 +139,7 @@ public class ScheduleLoader
                 ex.StatusCode, ex.Message);
             throw;
         }
-        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("⏹️ Schedule load cancelled by user");
             throw;
@@ -183,7 +173,7 @@ public class ScheduleLoader
     /// or when the configured BaseAddress needs to be overridden.
     /// If the URL is null or empty, the default configured URL is used.
     /// </remarks>
-    public async Task<ScheduleRoot> LoadAsync(string? url, CancellationToken cancellationToken = default)
+    public virtual async Task<ScheduleRoot> LoadAsync(string? url, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(url))
             return await LoadAsync(cancellationToken);

@@ -1,4 +1,4 @@
-﻿using MaybeComingBot.Utils;
+﻿﻿using MaybeComingBot.Utils;
 
 namespace MaybeComingBot.Constants;
 
@@ -13,52 +13,75 @@ namespace MaybeComingBot.Constants;
 public static class BotMessages
 {
     /// <summary>Welcome message displayed when user starts the bot.</summary>
-    public const string Welcome = "🚌 *SELECT STOP.*";
+    public const string Welcome = "👋 *Welcome!*\n\nChoose a stop to see bus schedules.";
 
     /// <summary>Message shown when a stop is not found in the schedule.</summary>
-    public const string StopNotFound = "⚠️ *STOP NOT FOUND.* USE /start.";
+    public const string StopNotFound = "⚠️ *Stop not found.*\n\nPlease use /start to choose a stop again.";
 
     /// <summary>Message shown when schedule data is not available.</summary>
-    public const string NoSchedule = "⚠️ *SCHEDULE UNAVAILABLE.* TRY /update.";
+    public const string NoSchedule = "😔 *Schedule is currently unavailable.*\n\nPlease try again later.";
 
     /// <summary>Prompt asking user to select a stop first.</summary>
-    public const string ChooseStopFirst = "*SELECT STOP* VIA /start FIRST.";
+    public const string ChooseStopFirst = "👇 *Please select a stop first.*\n\nUse /start to open the stop menu.";
 
     /// <summary>Confirmation message after successful schedule update.</summary>
-    public const string UpdateSuccess = "✅ *SCHEDULE UPDATED.*";
+    public const string UpdateSuccess = "✅ *Schedule updated successfully.*";
 
     /// <summary>Error message when schedule update fails.</summary>
-    public const string UpdateFailed = "❌ *UPDATE FAILED.* RETRY LATER.";
+    public const string UpdateFailed = "❌ *Update failed.*\n\nPlease try again in a few minutes.";
 
     /// <summary>Status message shown while schedule is being fetched.</summary>
-    public const string UpdateLoading = "⏳ *FETCHING SCHEDULE...*";
+    public const string UpdateLoading = "⏳ *Fetching the latest schedule...*";
 
     /// <summary>Message shown when user lacks administrative privileges.</summary>
-    public const string NoRights = "⛔ *ACCESS DENIED.*";
+    public const string NoRights = "⛔ *Access denied.*\n\nYou don't have permission to use this command.";
 
     /// <summary>Message shown for unrecognized commands.</summary>
-    public const string UnknownCommand = "⚠️ *UNKNOWN COMMAND.* USE /help.";
+    public const string UnknownCommand = "🤔 *Unknown command.*\n\nUse /help to see what I can do.";
 
     /// <summary>Confirmation message after action cancellation.</summary>
-    public const string CancelConfirmed = "✅ *ACTION CANCELLED.* USE /start.";
+    public const string CancelConfirmed = "✅ *Action cancelled.*\n\nUse /start to begin again.";
 
     /// <summary>Warning message when rate limit is exceeded.</summary>
-    public const string TooManyRequests = "⛔ *SLOW DOWN.* RATE LIMIT EXCEEDED.";
+    public const string TooManyRequests = "🐢 *Slow down a bit!*\n\nYou're sending messages too quickly. Please wait a moment.";
 
-    /// <summary>Template for no trips in the near future (7 days).</summary>
-    /// <remarks>Placeholder {0} is the stop name.</remarks>
-    public const string NoTripsInFuture = "🚌 *{0}*\n\n❌ *NO TRIPS IN THE NEAR FUTURE (7 DAYS).*";
+    /// <summary>Message shown when a callback query has no associated chat.</summary>
+    public const string CallbackNoChat = "⚠️ Chat not found. Please use /start in a private chat.";
 
-    /// <summary>Message shown when user session has expired.</summary>
-    public const string SessionExpired = "⏳ SESSION EXPIRED. PLEASE USE /start TO RESTART.";
-    
+    /// <summary>Message shown when the user's session has expired.</summary>
+    public const string SessionExpiredRestart = "⏰ *Your session has expired.*\n\nUse /start to continue.";
+
+    /// <summary>Message shown when callback data is malformed.</summary>
+    public const string InvalidCallbackData = "⚠️ *Invalid selection.*\n\nPlease use /start to try again.";
+
+    /// <summary>Message shown to admins when the schedule is not loaded yet.</summary>
+    public const string ScheduleNotLoaded = "⚠️ *Schedule is not loaded yet.*\n\nPress the button below to fetch it now:";
+
+    /// <summary>Message shown to admins after a successful refresh with no stops.</summary>
+    public const string UpdatedButNoStops = "⚠️ *Updated, but no stops were found.*\n\nPlease check the schedule data source.";
+
+    /// <summary>Message shown when a user report is sent successfully.</summary>
+    public const string ReportSent = "✅ *Report sent.*\n\nThank you for your feedback! We'll take a look soon.";
+
+    /// <summary>Message shown when a user report fails to send.</summary>
+    public const string ReportFailed = "❌ *Could not send the report.*\n\nPlease try again in a few minutes.";
+
+    /// <summary>Message shown when no admins are configured for reporting.</summary>
+    public const string NoAdminsConfigured = "⚠️ *No support is configured right now.*\n\nPlease try again later.";
+
+    /// <summary>Message shown when the selected stop has no schedule data.</summary>
+    public const string StopHasNoSchedule = "⚠️ *No schedule is available for this stop.*\n\nPlease try another stop.";
+
+    /// <summary>Header used in the report instructions block.</summary>
+    public const string ReportHeader = "📨 *Report a bug or issue*";
+
     /// <summary>
     /// Formats a message confirming stop selection.
     /// </summary>
     /// <param name="stopName">The name of the selected stop.</param>
     /// <returns>A formatted confirmation message with the stop name.</returns>
     public static string StopSelected(string stopName) =>
-        $"✅ *STOP SET:* {TimeHelper.EscapeMarkdown(stopName) ?? "UNKNOWN"}. USE BUTTONS:";
+        $"✅ *Stop selected:* {TimeHelper.EscapeMarkdown(stopName) ?? "Unknown"}.\n\nWhat would you like to see?";
 
     /// <summary>
     /// Formats a message indicating no trips on a specific day.
@@ -67,89 +90,66 @@ public static class BotMessages
     /// <param name="day">The day of the week with no trips.</param>
     /// <returns>A formatted message stating no trips on the given day.</returns>
     public static string NoTripsToday(string stopName, DayOfWeek day) =>
-        $"⛔ {TimeHelper.EscapeMarkdown(stopName) ?? "STOP"}: *NO TRIPS ON {day}.*";
-
-    /// <summary>
-    /// Formats a message indicating no trips today or tomorrow.
-    /// </summary>
-    /// <param name="tomorrow">The day of the week for tomorrow.</param>
-    /// <returns>A formatted message stating no trips for today or tomorrow.</returns>
-    public static string NoTripsTodayAndTomorrow(DayOfWeek tomorrow) =>
-        $"⛔ *NO TRIPS TODAY OR TOMORROW ({tomorrow}).*";
-
-    /// <summary>
-    /// Formats a message for the nearest trip on the next day.
-    /// </summary>
-    /// <param name="day">The day of the week for the next trip.</param>
-    /// <param name="time">The departure time of the next trip.</param>
-    /// <returns>A formatted message showing the next trip tomorrow.</returns>
-    public static string NearestTomorrow(DayOfWeek day, string time) =>
-        $"⛔ *NO MORE TRIPS TODAY.*\n*NEXT:* TOMORROW ({day}) AT {TimeHelper.EscapeMarkdown(time) ?? "UNKNOWN"}.";
+        $"🚫 {TimeHelper.EscapeMarkdown(stopName) ?? "This stop"}: *no trips on {day}.*";
 
     /// <summary>
     /// Formats instructions for submitting a bug report to administrators.
     /// </summary>
-    /// <param name="adminLink">The Telegram link to contact an administrator.</param>
-    /// <returns>A formatted message with report instructions and admin contact link.</returns>
-    public static string ReportInstructions(string adminLink) =>
-        $"📨 *REPORT TO ADMIN*\n\n" +
-        $"FOUND A BUG? WRITE:\n" +
-        $"[👤 CONTACT ADMIN]({adminLink})\n\n" +
-        $"OR USE: `/report YOUR_TEXT`\n\n" +
-        $"*REQUIRED:*\n" +
-        $"• STOP NAME\n" +
-        $"• TIME\n" +
-        $"• ISSUE DESCRIPTION";
+    /// <param name="adminLink">An optional Telegram contact link (e.g., "https://t.me/support"). May be null.</param>
+    /// <param name="adminUsername">An optional display username (e.g., "support") for the contact link. May be null.</param>
+    /// <returns>A formatted message with report instructions and an optional admin contact link.</returns>
+    public static string ReportInstructions(string? adminLink, string? adminUsername = null)
+    {
+        var contactLine = string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(adminLink))
+        {
+            var label = string.IsNullOrWhiteSpace(adminUsername)
+                ? "Contact admin"
+                : $"@{adminUsername}";
+            contactLine = $"[👤 {label}]({adminLink})\n\n";
+        }
+
+        return $"{ReportHeader}\n\n" +
+               "Found a bug or have a suggestion? Send it straight to the support team:\n\n" +
+               $"• Use `/report YOUR_TEXT` — e.g., `/report Bus 42 was late at 08:15`\n\n" +
+               $"{contactLine}" +
+               "*Tip:* include the stop name, time, and a short description so we can fix it faster.";
+    }
 
     /// <summary>
     /// Formats the help menu with all available commands and buttons.
     /// </summary>
+    /// <param name="adminUsername">
+    /// An optional public Telegram username (without the leading "@") used to render an
+    /// admin contact link (e.g., "support"). When omitted, no contact link is shown.
+    /// </param>
     /// <returns>A formatted help message with command and button descriptions.</returns>
-    public static string Help() =>
-        "📖 *COMMANDS:*\n\n" +
-        "/start — SELECT STOP\n" +
-        "/update — REFRESH (ADMIN ONLY)\n" +
-        "/report — SEND BUG REPORT\n" +
-        "/status — BOT STATUS (ADMIN)\n" +
-        "/cancel — ABORT ACTION\n" +
-        "/help — THIS SCREEN\n\n" +
-        "*BUTTONS:*\n" +
-        "• *Nearest* — NEXT BUS\n" +
-        "• *Today* — FULL DAY\n" +
-        "• *Week* — 7 DAYS\n" +
-        "• *Change stop* — RE-SELECT\n" +
-        "• *📨 Report bug* — TO ADMIN\n" +
-        "• *🔙 Back* — MAIN MENU";
+    public static string Help(string? adminUsername = null)
+    {
+        var contactLine = string.Empty;
 
-    /// <summary>
-    /// Formats an error message with a consistent prefix.
-    /// </summary>
-    /// <param name="message">The error description.</param>
-    /// <returns>A formatted error message with ❌ prefix.</returns>
-    public static string Error(string message) =>
-        $"❌ {message}";
+        if (!string.IsNullOrWhiteSpace(adminUsername))
+        {
+            contactLine = $"\n\n👤 *Contact support:* [@{adminUsername}](https://t.me/{adminUsername})";
+        }
 
-    /// <summary>
-    /// Formats a success message with a consistent prefix.
-    /// </summary>
-    /// <param name="message">The success description.</param>
-    /// <returns>A formatted success message with ✅ prefix.</returns>
-    public static string Success(string message) =>
-        $"✅ {message}";
-
-    /// <summary>
-    /// Formats an informational message with a consistent prefix.
-    /// </summary>
-    /// <param name="message">The informational content.</param>
-    /// <returns>A formatted info message with ℹ️ prefix.</returns>
-    public static string Info(string message) =>
-        $"ℹ️ {message}";
-
-    /// <summary>
-    /// Formats a warning message with a consistent prefix.
-    /// </summary>
-    /// <param name="message">The warning description.</param>
-    /// <returns>A formatted warning message with ⚠️ prefix.</returns>
-    public static string Warning(string message) =>
-        $"⚠️ {message}";
+        return "📖 *Help & commands*\n\n" +
+               "*/start* — Choose a stop\n" +
+               "*/report* — Send feedback to support\n" +
+               "*/cancel* — Cancel the current action\n" +
+               "*/help* — Show this screen\n\n" +
+               "*Admin commands*\n" +
+               "*/update* — Refresh the schedule\n" +
+               "*/status* — Bot health and statistics\n\n" +
+               "*Buttons*\n" +
+               $"• {BotCommands.NearestLabel} — next departure\n" +
+               $"• {BotCommands.TodayLabel} — full schedule for today\n" +
+               $"• {BotCommands.WeekLabel} — 7-day overview\n" +
+               $"• {BotCommands.ChangeStopLabel} — pick a different stop\n" +
+               $"• {BotCommands.ReportToAdminLabel} — report a problem\n" +
+               $"• {BotCommands.BackLabel} — back to the stop menu" +
+               contactLine;
+    }
 }
+

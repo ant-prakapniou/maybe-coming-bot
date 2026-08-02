@@ -2,7 +2,6 @@
 using MaybeComingBot.Constants;
 using MaybeComingBot.Utils;
 using Microsoft.Extensions.Logging;
-using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -18,13 +17,13 @@ namespace MaybeComingBot.Services;
 /// management before dispatching to <see cref="CommandDispatcher"/>.
 /// </remarks>
 public class BotHandler(
-    ITelegramBotClient botClient,
+    ITelegramSender sender,
     IUserStateService userStateService,
     CommandDispatcher dispatcher,
     RateLimiter rateLimiter,
     ILogger<BotHandler> logger)
 {
-    private readonly ITelegramBotClient _botClient = botClient;
+    private readonly ITelegramSender _sender = sender;
     private readonly IUserStateService _userStateService = userStateService;
     private readonly CommandDispatcher _dispatcher = dispatcher;
     private readonly RateLimiter _rateLimiter = rateLimiter;
@@ -81,7 +80,7 @@ public class BotHandler(
                 return;
 
             // Ignore messages from bots
-            if (message.From?.IsBot == true)
+            if (message.From?.IsBot is true)
                 return;
 
             // Store user information
@@ -97,7 +96,7 @@ public class BotHandler(
             // Apply rate limiting
             if (!await _rateLimiter.IsAllowedAsync(userId))
             {
-                await _botClient.SendMessage(chatId, BotMessages.TooManyRequests);
+                await _sender.SendAsync(chatId, BotMessages.TooManyRequests);
                 return;
             }
 
@@ -133,13 +132,13 @@ public class BotHandler(
     /// <returns>The user ID, or 0 if not found.</returns>
     private static long GetUserId(Update update)
     {
-        if (update?.Message?.From != null)
+        if (update?.Message?.From is not null)
             return update.Message.From.Id;
 
-        if (update?.CallbackQuery?.From != null)
+        if (update?.CallbackQuery?.From is not null)
             return update.CallbackQuery.From.Id;
 
-        return 0;
+        return default;
     }
 
     /// <summary>
@@ -149,14 +148,14 @@ public class BotHandler(
     /// <returns>The chat ID, or 0 if not found.</returns>
     private static long GetChatId(Update update)
     {
-        if (update?.Message?.Chat != null)
+        if (update?.Message?.Chat is not null)
             return update.Message.Chat.Id;
 
-        if (update?.CallbackQuery?.Message?.Chat != null)
+        if (update?.CallbackQuery?.Message?.Chat is not null)
             return update.CallbackQuery.Message.Chat.Id;
 
         // For inline mode (no chat)
-        return 0;
+        return default;
     }
 
     /// <summary>

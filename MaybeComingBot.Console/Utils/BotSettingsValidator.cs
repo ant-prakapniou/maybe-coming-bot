@@ -78,6 +78,28 @@ public class BotSettingsValidator : IValidateOptions<BotSettings>
         }
 
         // ============================================================
+        // SUPPORT USERNAME VALIDATION (optional, privacy-safe contact)
+        // ============================================================
+
+        if (!string.IsNullOrWhiteSpace(options.SupportUsername))
+        {
+            var username = options.SupportUsername;
+
+            // Telegram usernames are 5-32 characters: letters, digits, underscore.
+            if (username.Length < 5 || username.Length > 32)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"SupportUsername must be between 5 and 32 characters (got {username.Length}).");
+            }
+
+            if (!username.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
+            {
+                return ValidateOptionsResult.Fail(
+                    "SupportUsername may only contain letters, digits, and underscores.");
+            }
+        }
+
+        // ============================================================
         // CROSS-PROPERTY VALIDATION
         // ============================================================
 

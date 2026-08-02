@@ -1,9 +1,9 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using MaybeComingBot.Abstractions;
+using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Retry;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
@@ -22,13 +22,14 @@ namespace MaybeComingBot.Services;
 /// <item><description>Support for editing messages and sending chat actions</description></item>
 /// </list>
 /// </remarks>
-public class TelegramSender
+public class TelegramSender:ITelegramSender
 {
     private readonly ITelegramBotClient _botClient;
     private readonly ILogger<TelegramSender> _logger;
     private readonly AsyncRetryPolicy _retryPolicy;
     private const int MaxMessageLength = 4096;
     private const int DefaultMaxRetryCount = 5;
+    private const int MaxEditableMessageLength = 4096;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TelegramSender"/> class.
@@ -74,12 +75,18 @@ public class TelegramSender
     /// <para>
     /// The method handles:
     /// <list type="bullet">
-    /// <item><description>Text truncation to 4096 characters</description></item>
+    /// <item><description>Automatic splitting of text longer than 4096 characters into multiple messages</description></item>
     /// <item><description>Retry on transient errors (429, 5xx)</description></item>
     /// <item><description>Silent handling of 403 (bot blocked)</description></item>
     /// <item><description>Silent handling of 400 (bad request)</description></item>
     /// <item><description>Markdown parse errors (falls back to plain text)</description></item>
     /// </list>
+    /// </para>
+    /// <para>
+    /// When the text exceeds Telegram's 4096 character limit, it is split on newline
+    /// boundaries into multiple messages. Only the first chunk receives the
+    /// <paramref name="replyMarkup"/>. The last chunk uses plain text parsing to
+    /// avoid broken Markdown spans across split messages.
     /// </para>
     /// <para>
     /// Most errors are handled gracefully and do not throw exceptions,
@@ -99,14 +106,22 @@ public class TelegramSender
             return;
         }
 
-        var truncatedText = TruncateText(text);
+        var messages = SplitText(text);
         var originalParseMode = parseMode ?? ParseMode.Markdown;
 
         try
         {
-            await SendWithRetryAsync(chatId, truncatedText, originalParseMode, replyMarkup, ct);
+            for (int i = 0; i < messages.Length; i++)
+            {
+                // Keep the reply markup only on the first message.
+                // The final chunk uses plain text to avoid broken Markdown formatting.
+                var markup = i == 0 ? replyMarkup : null;
+                var mode = i == messages.Length - 1 ? ParseMode.None : originalParseMode;
+
+                await SendWithRetryAsync(chatId, messages[i], mode, markup, ct);
+            }
         }
-        catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             _logger.LogDebug("Send cancelled by user for {ChatId}", chatId);
             // Don't rethrow - normal shutdown
@@ -304,15 +319,52 @@ public class TelegramSender
     }
 
     /// <summary>
-    /// Truncates text to Telegram's maximum message length.
+    /// Truncates text to Telegram's maximum editable message length.
     /// </summary>
     /// <param name="text">The text to truncate.</param>
     /// <returns>Truncated text with "..." appended if truncated.</returns>
     private static string TruncateText(string text)
     {
-        if (text.Length <= MaxMessageLength)
+        if (text.Length <= MaxEditableMessageLength)
             return text;
 
-        return text[..(MaxMessageLength - 3)] + "...";
+        return text[..(MaxEditableMessageLength - 3)] + "...";
+    }
+
+    /// <summary>
+    /// Splits text into chunks that fit within Telegram's message length limit.
+    /// </summary>
+    /// <param name="text">The text to split.</param>
+    /// <returns>
+    /// An array of text chunks, each at most <see cref="MaxMessageLength"/> characters.
+    /// Splitting attempts to break at newline boundaries.
+    /// </returns>
+    private static string[] SplitText(string text)
+    {
+        if (text.Length <= MaxMessageLength)
+            return [text];
+
+        var chunks = new List<string>();
+        var remaining = text;
+
+        while (remaining.Length > MaxMessageLength)
+        {
+            // Find the last newline within the limit
+            var chunkLength = remaining.LastIndexOf('\n', MaxMessageLength - 1);
+
+            if (chunkLength <= 0)
+            {
+                // No newline found - hard split
+                chunkLength = MaxMessageLength;
+            }
+
+            chunks.Add(remaining[..chunkLength].TrimEnd('\n', '\r'));
+            remaining = remaining[chunkLength..];
+        }
+
+        if (remaining.Length > 0)
+            chunks.Add(remaining);
+
+        return chunks.ToArray();
     }
 }

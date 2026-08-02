@@ -39,74 +39,75 @@ public static class ServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddBotServices(this IServiceCollection services, IConfiguration configuration)
     {
-
-        /// <summary>
-        /// Registers BotSettings as IOptions with DataAnnotation validation.
-        /// </summary>
+        // Registers BotSettings as IOptions with DataAnnotation validation.
         services.AddOptions<BotSettings>()
             .Bind(configuration.GetBotSection())
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
-        /// <summary>
-        /// Registers custom validator for additional cross-property validation.
-        /// </summary>
+        // Registers custom validator for additional cross-property validation.
         services.AddSingleton<IValidateOptions<BotSettings>, BotSettingsValidator>();
 
-        /// <summary>
-        /// Registers HTTP client for schedule loading with Polly retry policies.
-        /// </summary>
-        services.AddHttpClient(nameof(ScheduleLoader), client =>
+        // Registers HTTP client for schedule loading with Polly retry policies.
+        services.AddHttpClient(nameof(ScheduleLoader), (provider, client) =>
         {
-            var settings = configuration.GetBotSettings();
-            if (settings is not null && !string.IsNullOrEmpty(settings.ScheduleUrl))
+            var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;
+
+            if (!string.IsNullOrEmpty(settings.ScheduleUrl))
             {
                 client.BaseAddress = new Uri(settings.ScheduleUrl);
             }
-            client.Timeout = TimeSpan.FromSeconds(30);
+
+            // Use the configured timeout for schedule HTTP requests.
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
         })
         .AddPolicyHandler((provider, _) =>
         {
             var settings = provider.GetRequiredService<IOptions<BotSettings>>();
             return PollyPolicyExtensions.GetRetryPolicy(settings);
         })
-        .AddPolicyHandler(PollyPolicyExtensions.GetTimeoutPolicy())
+        .AddPolicyHandler((provider, _) =>
+        {
+            var settings = provider.GetRequiredService<IOptions<BotSettings>>();
+            return PollyPolicyExtensions.GetTimeoutPolicy(settings);
+        })
         .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
-        /// <summary>
-        /// Registers Telegram bot client with token from settings.
-        /// </summary>
+        // Registers Telegram bot client with token from settings.
         services.AddSingleton<ITelegramBotClient>(provider =>
         {
             var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;
             return new TelegramBotClient(settings.BotToken);
         });
 
-        /// <summary>
-        /// Registers all business services as singletons.
-        /// </summary>
+        // Registers all business services as singletons.
         services.AddSingleton<IScheduleStorage, ScheduleStorage>();
         services.AddSingleton<RateLimiter>();
         services.AddSingleton<IUserStateService, UserStateService>();
-        services.AddSingleton<TelegramSender>();
+        services.AddSingleton<ITelegramSender, TelegramSender>();
         services.AddSingleton<StopSelectionGuard>();
         services.AddSingleton<ScheduleFormatter>();
         services.AddSingleton<ScheduleLoader>();
-        services.AddSingleton<IScheduleRefreshService, ScheduleRefreshService>();
         services.AddSingleton<CommandDispatcher>();
         services.AddSingleton<BotHandler>();
 
-        /// <summary>
-        /// Registers background services that run continuously.
-        /// </summary>
+        // Registers the schedule refresh service as a singleton so that both the
+        // hosted background service and the IScheduleRefreshService consumers
+        // (CommandDispatcher, BotHealthCheck) share the SAME instance. This is
+        // critical: without a single instance, the /status command and health
+        // check would observe a different, non-running instance.
+        services.AddSingleton<ScheduleRefreshService>();
+        services.AddSingleton<IScheduleRefreshService>(provider =>
+            provider.GetRequiredService<ScheduleRefreshService>());
+
+        // Registers background services that run continuously.
         services.AddHostedService<ScheduleRefreshService>();
         services.AddHostedService<UserStateCleanupService>();
 
-        /// <summary>
-        /// Registers health check for monitoring bot status.
-        /// </summary>
+        // Registers health check for monitoring bot status.
         services.AddHealthChecks().AddCheck<BotHealthCheck>("bot_health");
 
         return services;
     }
 }
+

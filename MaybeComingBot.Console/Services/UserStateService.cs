@@ -19,25 +19,16 @@ namespace MaybeComingBot.Services;
 /// <item><description>Activity tracking for expiration calculations</description></item>
 /// </list>
 /// </remarks>
-public class UserStateService : IUserStateService
+/// <param name="settings">The bot settings containing TTL configuration.</param>
+/// <param name="logger">The logger instance for this class.</param>
+public class UserStateService(
+    IOptions<BotSettings> settings,
+    ILogger<UserStateService> logger) : IUserStateService
 {
     private readonly ConcurrentDictionary<long, UserState> _states = new();
-    private readonly ILogger<UserStateService> _logger;
-    private readonly BotSettings _settings;
+    private readonly ILogger<UserStateService> _logger = logger;
+    private readonly BotSettings _settings = settings.Value;
     private const int DefaultTtlHours = 24;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="UserStateService"/> class.
-    /// </summary>
-    /// <param name="settings">The bot settings containing TTL configuration.</param>
-    /// <param name="logger">The logger instance for this class.</param>
-    public UserStateService(
-        IOptions<BotSettings> settings,
-        ILogger<UserStateService> logger)
-    {
-        _settings = settings.Value;
-        _logger = logger;
-    }
 
     /// <inheritdoc/>
     public UserState GetOrCreate(long userId)
@@ -70,7 +61,7 @@ public class UserStateService : IUserStateService
             throw new ArgumentException("Invalid stopId", nameof(stopId));
 
         _states.AddOrUpdate(userId,
-            _ => CreateUserState(stopId: stopId, commandCount: 1),
+            _ => CreateUserState(stopId: stopId),
             (_, state) => {
                 state.SelectedStopId = stopId;
                 state.LastActivity = DateTime.UtcNow;
@@ -185,14 +176,12 @@ public class UserStateService : IUserStateService
     /// <param name="lastName">The user's last name.</param>
     /// <param name="username">The user's Telegram username.</param>
     /// <param name="stopId">The selected stop ID.</param>
-    /// <param name="commandCount">The initial command count.</param>
     /// <returns>A new <see cref="UserState"/> instance.</returns>
     private static UserState CreateUserState(
         string? firstName = null,
         string? lastName = null,
         string? username = null,
-        string? stopId = null,
-        int commandCount = 0)
+        string? stopId = null)
     {
         return new UserState
         {
@@ -200,8 +189,7 @@ public class UserStateService : IUserStateService
             LastName = lastName ?? string.Empty,
             Username = username ?? string.Empty,
             SelectedStopId = stopId ?? string.Empty,
-            LastActivity = DateTime.UtcNow,
-            CommandCount = commandCount
+            LastActivity = DateTime.UtcNow
         };
     }
 }

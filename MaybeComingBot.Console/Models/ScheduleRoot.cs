@@ -52,7 +52,7 @@ public sealed class ScheduleRoot
     /// <returns>
     /// <c>true</c> if there are no stops, or all stops have no trips; otherwise, <c>false</c>.
     /// </returns>
-    public bool IsEmpty() => Stops.Count == 0 || Stops.All(s => s.Schedule.Count == 0);
+    public bool IsEmpty() => Stops.Count is 0 || Stops.All(s => s.Schedule.Count is 0);
 
     /// <summary>
     /// Retrieves a stop by its unique identifier.
@@ -91,9 +91,7 @@ public sealed class ScheduleRoot
     /// A list of <see cref="Stop"/> objects that contain trips.
     /// </returns>
     public List<Stop> GetStopsWithTrips()
-    {
-        return Stops.Where(s => s.Schedule.Any(d => d.Trips.Count > 0)).ToList();
-    }
+        => [..Stops.Where(s => s.Schedule.Any(d => d.Trips.Count > 0))];
 
     /// <summary>
     /// Checks for duplicate stop IDs in the schedule.
@@ -106,9 +104,7 @@ public sealed class ScheduleRoot
     /// Duplicate IDs can cause data inconsistency issues.
     /// </remarks>
     public bool HasDuplicateStopIds()
-    {
-        return Stops.GroupBy(s => s.Id).Any(g => g.Count() > 1);
-    }
+        => Stops.GroupBy(s => s.Id).Any(g => g.Count() > 1);
 
     /// <summary>
     /// Checks for duplicate stop names in the schedule using case-insensitive comparison.
@@ -121,10 +117,8 @@ public sealed class ScheduleRoot
     /// This method helps identify potential display issues.
     /// </remarks>
     public bool HasDuplicateStopNames()
-    {
-        return Stops.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+        => Stops.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
                     .Any(g => g.Count() > 1);
-    }
 
     /// <summary>
     /// Returns a string representation of the schedule root.
@@ -133,7 +127,5 @@ public sealed class ScheduleRoot
     /// A string containing the total number of stops (e.g., "ScheduleRoot: 15 stops").
     /// </returns>
     public override string ToString()
-    {
-        return $"ScheduleRoot: {StopCount} stops";
-    }
+        => $"ScheduleRoot: {StopCount} stops";
 }

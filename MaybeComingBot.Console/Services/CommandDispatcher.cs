@@ -1,10 +1,9 @@
-﻿using MaybeComingBot.Abstractions;
+﻿﻿using MaybeComingBot.Abstractions;
 using MaybeComingBot.Constants;
 using MaybeComingBot.Models;
 using MaybeComingBot.Utils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -24,35 +23,34 @@ namespace MaybeComingBot.Services;
 /// It also manages admin-only commands and report forwarding to administrators.
 /// </remarks>
 public class CommandDispatcher(
-    ITelegramBotClient botClient,
     IScheduleStorage storage,
     IUserStateService userStateService,
     IScheduleRefreshService refreshService,
     ScheduleFormatter formatter,
     StopSelectionGuard guard,
-    TelegramSender sender,
+    ITelegramSender sender,
     IOptions<BotSettings> settings,
     ILogger<CommandDispatcher> logger)
 {
-    private readonly ITelegramBotClient _botClient = botClient;
     private readonly IScheduleStorage _storage = storage;
     private readonly IUserStateService _userStateService = userStateService;
     private readonly IScheduleRefreshService _refreshService = refreshService;
     private readonly ScheduleFormatter _formatter = formatter;
     private readonly StopSelectionGuard _guard = guard;
-    private readonly TelegramSender _sender = sender;
-    private readonly HashSet<long> _adminUserIds = new(settings?.Value?.AdminUserIds ?? Array.Empty<long>());
+    private readonly ITelegramSender _sender = sender;
+    private readonly HashSet<long> _adminUserIds = [.. settings?.Value?.AdminUserIds ?? []];
+    private readonly string _supportUsername = settings?.Value?.SupportUsername ?? string.Empty;
     private readonly ILogger<CommandDispatcher> _logger = logger;
 
     /// <summary>
     /// Main keyboard displayed after stop selection.
     /// </summary>
-    private static readonly ReplyKeyboardMarkup MainKeyboard = new(new[]
-    {
-        new KeyboardButton[] { BotCommands.Nearest, BotCommands.Today },
-        new KeyboardButton[] { BotCommands.Week, BotCommands.ChangeStop },
-        new KeyboardButton[] { BotCommands.ReportToAdmin, BotCommands.Back }
-    })
+    private static readonly ReplyKeyboardMarkup MainKeyboard = new(
+    [
+        [BotCommands.NearestLabel, BotCommands.TodayLabel],
+        [BotCommands.WeekLabel, BotCommands.ChangeStopLabel],
+        [BotCommands.ReportToAdminLabel, BotCommands.BackLabel]
+    ])
     { ResizeKeyboard = true };
 
     /// <summary>
@@ -61,6 +59,31 @@ public class CommandDispatcher(
     /// <param name="userId">The Telegram user ID to check.</param>
     /// <returns><c>true</c> if the user is an admin; otherwise, <c>false</c>.</returns>
     private bool IsAdmin(long userId) => userId > 0 && _adminUserIds.Contains(userId);
+
+    /// <summary>
+    /// Normalizes a tapped keyboard label to its canonical command token.
+    /// </summary>
+    /// <param name="command">The raw command or button text.</param>
+    /// <returns>
+    /// The canonical command token (e.g., "Nearest", "Report bug"). Emoji prefixes
+    /// from display labels are stripped so manually typed text still matches.
+    /// </returns>
+    private static string NormalizeCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return command ?? string.Empty;
+
+        return command switch
+        {
+            BotCommands.NearestLabel => BotCommands.Nearest,
+            BotCommands.TodayLabel => BotCommands.Today,
+            BotCommands.WeekLabel => BotCommands.Week,
+            BotCommands.ChangeStopLabel => BotCommands.ChangeStop,
+            BotCommands.ReportToAdminLabel => BotCommands.ReportToAdmin,
+            BotCommands.BackLabel => BotCommands.Back,
+            _ => command.Trim()
+        };
+    }
 
     /// <summary>
     /// Dispatches a command from a user message.
@@ -74,6 +97,7 @@ public class CommandDispatcher(
     /// Command flow:
     /// <list type="number">
     /// <item><description>Handles cancel, start, help, admin commands</description></item>
+    /// <item><description>Normalizes emoji-prefixed button labels to canonical tokens</description></item>
     /// <item><description>Checks if user has a stop selected (except for special commands)</description></item>
     /// <item><description>Routes to appropriate formatter method</description></item>
     /// <item><description>Unknown commands show help prompt</description></item>
@@ -100,7 +124,7 @@ public class CommandDispatcher(
                 return;
 
             case BotCommands.Help:
-                await _sender.SendAsync(chatId, BotMessages.Help(), parseMode: ParseMode.Markdown);
+                await _sender.SendAsync(chatId, BotMessages.Help(_supportUsername), parseMode: ParseMode.Markdown);
                 return;
 
             case BotCommands.Update:
@@ -114,9 +138,21 @@ public class CommandDispatcher(
             case BotCommands.Report:
                 await HandleReportAsync(chatId, userId, args);
                 return;
+        }
 
+        // Normalize emoji-prefixed keyboard labels to canonical command tokens.
+        command = NormalizeCommand(command);
+
+        // These commands are available even without an active session/selected stop.
+        switch (command)
+        {
             case BotCommands.ReportToAdmin:
                 await ShowReportInstructionsAsync(chatId);
+                return;
+
+            case BotCommands.ChangeStop:
+            case BotCommands.Back:
+                await HandleStartAsync(chatId, userId);
                 return;
         }
 
@@ -136,11 +172,6 @@ public class CommandDispatcher(
 
             case BotCommands.Week:
                 await _sender.SendAsync(chatId, _formatter.FormatWeek(stop), ParseMode.Markdown);
-                return;
-
-            case BotCommands.ChangeStop:
-            case BotCommands.Back:
-                await HandleStartAsync(chatId, userId);
                 return;
         }
 
@@ -185,9 +216,10 @@ public class CommandDispatcher(
         if (message?.Chat?.Id is null or 0)
         {
             _logger.LogWarning("Callback without chat (UserId: {UserId})", userId);
-            await _botClient.AnswerCallbackQuery(
+            await _sender.AnswerCallbackAsync(
                 callbackQuery.Id,
-                "⚠️ CHAT NOT FOUND. USE /start IN PRIVATE CHAT.");
+                BotMessages.CallbackNoChat,
+                showAlert: true);
             return;
         }
 
@@ -195,12 +227,12 @@ public class CommandDispatcher(
         var data = callbackQuery.Data;
 
         // Answer callback to remove "loading" indicator
-        await _botClient.AnswerCallbackQuery(callbackQuery.Id);
+        await _sender.AnswerCallbackAsync(callbackQuery.Id);
 
         // Check session
         if (!_userStateService.TryGet(userId, out _))
         {
-            await _sender.SendAsync(chatId, "⛔ SESSION EXPIRED. USE /start.");
+            await _sender.SendAsync(chatId, BotMessages.SessionExpiredRestart);
             return;
         }
 
@@ -213,10 +245,10 @@ public class CommandDispatcher(
 
         // Parse stop ID
         var parts = data.Split('|', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
+        if (parts.Length is 0)
         {
             _logger.LogWarning("Invalid callback data format: {Data}", data);
-            await _sender.SendAsync(chatId, "⚠️ INVALID DATA. USE /start.");
+            await _sender.SendAsync(chatId, BotMessages.InvalidCallbackData);
             return;
         }
 
@@ -245,13 +277,13 @@ public class CommandDispatcher(
     {
         var allStops = _storage.GetAllStops().ToList();
 
-        if (allStops.Count == 0)
+        if (allStops.Count is 0)
         {
             if (IsAdmin(userId))
             {
                 var adminKeyboard = new InlineKeyboardMarkup(
-                    InlineKeyboardButton.WithCallbackData("🔄 REFRESH", BotCommands.AdminRefresh));
-                await _sender.SendAsync(chatId, "⚠️ SCHEDULE NOT LOADED. PRESS TO REFRESH:", replyMarkup: adminKeyboard);
+                    InlineKeyboardButton.WithCallbackData(BotCommands.AdminRefreshLabel, BotCommands.AdminRefresh));
+                await _sender.SendAsync(chatId, BotMessages.ScheduleNotLoaded, replyMarkup: adminKeyboard);
                 return;
             }
 
@@ -286,14 +318,17 @@ public class CommandDispatcher(
             await _refreshService.ForceRefreshAsync();
             var stops = _storage.GetAllStops().ToList();
 
-            if (stops.Count == 0)
+            if (stops.Count is 0)
             {
-                await _sender.SendAsync(chatId, "⚠️ UPDATED BUT NO STOPS.");
+                await _sender.SendAsync(chatId, BotMessages.UpdatedButNoStops);
                 return;
             }
 
             var keyboard = CreateStopKeyboard(stops);
-            await _sender.SendAsync(chatId, $"{BotMessages.UpdateSuccess} {stops.Count} STOPS.\n\nSELECT STOP:", replyMarkup: keyboard);
+            await _sender.SendAsync(
+                chatId,
+                $"{BotMessages.UpdateSuccess}\n\n{stops.Count} stops loaded.\n\n👇 Choose a stop:",
+                replyMarkup: keyboard);
         }
         catch (Exception ex)
         {
@@ -313,11 +348,11 @@ public class CommandDispatcher(
             return;
         }
 
-        var msg = $"📊 *BOT STATUS*\n\n" +
-                  $"• {_refreshService.GetStatus()}\n" +
-                  $"• {_refreshService.GetLastAttemptInfo()}\n" +
-                  $"• STOPS: {_storage.StopCount}\n" +
-                  $"• ACTIVE USERS: {_userStateService.GetActiveUsersCount()}";
+        var msg = $"📊 *Bot Status*\n\n" +
+                  $"• Schedule: {_refreshService.GetStatus()}\n" +
+                  $"• Refresh: {_refreshService.GetLastAttemptInfo()}\n" +
+                  $"• Stops loaded: {_storage.StopCount}\n" +
+                  $"• Active users: {_userStateService.GetActiveUsersCount()}";
 
         await _sender.SendAsync(chatId, msg, ParseMode.Markdown);
     }
@@ -344,43 +379,62 @@ public class CommandDispatcher(
                 : $"@{state.Username}";
 
             var escapedReport = TimeHelper.EscapeMarkdown(reportText);
-            var adminMsg = $"📨 *NEW REPORT*\n\nUSER: {TimeHelper.EscapeMarkdown(fullName)}\nID: {userId}\nUSERNAME: {TimeHelper.EscapeMarkdown(username)}\n\n*MESSAGE:*\n{escapedReport}";
+            // The username is intentionally NOT markdown-escaped so Telegram renders
+            // "@part1_part2" as a tappable mention instead of "@part1\_part2".
+            var adminMsg = $"📨 *NEW REPORT*\n\n" +
+                           $"USER: {TimeHelper.EscapeMarkdown(fullName)}\n" +
+                           $"ID: {userId}\n" +
+                           $"USERNAME: {username}\n\n" +
+                           $"*MESSAGE:*\n{escapedReport}";
 
             foreach (var adminId in _adminUserIds)
             {
                 try
                 {
-                    await _botClient.SendMessage(adminId, adminMsg, parseMode: ParseMode.Markdown);
+                    await _sender.SendAsync(adminId, adminMsg, parseMode: ParseMode.Markdown);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to send report to admin {AdminId}", adminId);
                 }
             }
-            await _sender.SendAsync(chatId, "✅ REPORT SENT. THANK YOU.");
+            await _sender.SendAsync(chatId, BotMessages.ReportSent);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Report failed from {UserId}", userId);
-            await _sender.SendAsync(chatId, "❌ SEND FAILED. RETRY LATER.");
+            await _sender.SendAsync(chatId, BotMessages.ReportFailed);
         }
     }
 
     /// <summary>
     /// Shows report instructions to the user.
     /// </summary>
+    /// <remarks>
+    /// The admin is referenced by their configured public username (SupportUsername)
+    /// to avoid exposing a numeric Telegram user ID. When no username is configured,
+    /// no contact link is rendered — the user is guided to use /report instead.
+    /// </remarks>
     private async Task ShowReportInstructionsAsync(long chatId)
     {
-        if (_adminUserIds.Count == 0)
+        if (_adminUserIds.Count is 0)
         {
-            await _sender.SendAsync(chatId, "⚠️ NO ADMINS CONFIGURED. CONTACT SUPPORT.");
+            await _sender.SendAsync(chatId, BotMessages.NoAdminsConfigured);
             return;
         }
 
-        var firstAdminId = _adminUserIds.First();
+        string? adminLink = null;
+        string? adminUsername = null;
+
+        if (!string.IsNullOrWhiteSpace(_supportUsername))
+        {
+            adminUsername = _supportUsername;
+            adminLink = $"https://t.me/{_supportUsername}";
+        }
+
         await _sender.SendAsync(
             chatId,
-            BotMessages.ReportInstructions($"tg://user?id={firstAdminId}"),
+            BotMessages.ReportInstructions(adminLink, adminUsername),
             ParseMode.Markdown);
     }
 
@@ -390,8 +444,6 @@ public class CommandDispatcher(
     /// <param name="stops">The collection of stops to display.</param>
     /// <returns>An inline keyboard markup with stop buttons.</returns>
     private static InlineKeyboardMarkup CreateStopKeyboard(IEnumerable<Stop> stops)
-    {
-        return new InlineKeyboardMarkup(
-            stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
-    }
+        => new(stops.Select(stop => InlineKeyboardButton.WithCallbackData(stop.Name, stop.Id)).ToArray());
 }
+

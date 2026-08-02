@@ -48,36 +48,76 @@ public static class BotCommands
     public const string Cancel = "/cancel";
 
     /// <summary>
-    /// Button label for showing the nearest upcoming trip.
+    /// Canonical command token for showing the nearest upcoming trip.
+    /// Used for dispatch matching; not displayed directly.
     /// </summary>
     public const string Nearest = "Nearest";
 
     /// <summary>
-    /// Button label for showing today's full schedule.
+    /// Display label for the nearest-trip button.
+    /// </summary>
+    /// <remarks>Includes a bus emoji for visual recognition.</remarks>
+    public const string NearestLabel = "🚌 Nearest";
+
+    /// <summary>
+    /// Canonical command token for showing today's full schedule.
+    /// Used for dispatch matching; not displayed directly.
     /// </summary>
     public const string Today = "Today";
 
     /// <summary>
-    /// Button label for showing the weekly schedule.
+    /// Display label for the today's-schedule button.
+    /// </summary>
+    /// <remarks>Includes a calendar emoji for visual recognition.</remarks>
+    public const string TodayLabel = "📅 Today";
+
+    /// <summary>
+    /// Canonical command token for showing the weekly schedule.
+    /// Used for dispatch matching; not displayed directly.
     /// </summary>
     public const string Week = "Week";
 
     /// <summary>
-    /// Button label for changing the currently selected stop.
+    /// Display label for the weekly-schedule button.
+    /// </summary>
+    /// <remarks>Includes a calendar emoji for visual recognition.</remarks>
+    public const string WeekLabel = "🗓 Week";
+
+    /// <summary>
+    /// Canonical command token for changing the currently selected stop.
+    /// Used for dispatch matching; not displayed directly.
     /// </summary>
     public const string ChangeStop = "Change stop";
 
     /// <summary>
-    /// Button label for reporting an issue to administrators.
+    /// Display label for the change-stop button.
     /// </summary>
-    /// <remarks>Includes an envelope emoji for visual recognition.</remarks>
-    public const string ReportToAdmin = "📨 Report bug";
+    /// <remarks>Includes a swap emoji for visual recognition.</remarks>
+    public const string ChangeStopLabel = "🔄 Change stop";
 
     /// <summary>
-    /// Button label for returning to the main menu.
+    /// Canonical command token for reporting an issue to administrators.
+    /// Used for dispatch matching; not displayed directly.
+    /// </summary>
+    public const string ReportToAdmin = "Report bug";
+
+    /// <summary>
+    /// Display label for the report-bug button.
+    /// </summary>
+    /// <remarks>Includes an envelope emoji for visual recognition.</remarks>
+    public const string ReportToAdminLabel = "📨 Report bug";
+
+    /// <summary>
+    /// Canonical command token for returning to the main menu.
+    /// Used for dispatch matching; not displayed directly.
+    /// </summary>
+    public const string Back = "Back";
+
+    /// <summary>
+    /// Display label for the back button.
     /// </summary>
     /// <remarks>Includes a back arrow emoji for visual recognition.</remarks>
-    public const string Back = "🔙 Back";
+    public const string BackLabel = "🔙 Back";
 
     /// <summary>
     /// Button label for cancelling the current operation.
@@ -93,4 +133,10 @@ public static class BotCommands
     /// button in the schedule loading screen.
     /// </remarks>
     public const string AdminRefresh = "admin_refresh";
+
+    /// <summary>
+    /// Display label for the admin refresh button.
+    /// </summary>
+    /// <remarks>Includes a refresh emoji for visual recognition.</remarks>
+    public const string AdminRefreshLabel = "🔄 Refresh";
 }

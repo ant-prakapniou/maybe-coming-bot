@@ -58,7 +58,7 @@ public sealed class Trip
     public int Bus
     {
         get => _bus;
-        set => _bus = value > 0 ? value : 0;
+        set => _bus = value > 0 ? value : default;
     }
 
     /// <summary>
@@ -85,9 +85,7 @@ public sealed class Trip
     /// The special value "24:00" is converted to <see cref="TimeConstants.MaxMinutesInDay"/> (1440).
     /// </remarks>
     public int? ToMinutes()
-    {
-        return TimeHelper.ToMinutes(Time);
-    }
+        => TimeHelper.ToMinutes(Time);
 
     /// <summary>
     /// Converts the trip time to minutes since midnight with a default value.
@@ -96,10 +94,8 @@ public sealed class Trip
     /// <returns>
     /// The time in minutes since midnight, or <paramref name="defaultValue"/> if invalid.
     /// </returns>
-    public int ToMinutesSafe(int defaultValue = 0)
-    {
-        return TimeHelper.ToMinutesSafe(Time, defaultValue);
-    }
+    public int ToMinutesSafe(int defaultValue = default)
+        => TimeHelper.ToMinutesSafe(Time, defaultValue);
 
     /// <summary>
     /// Validates the trip data.
@@ -108,11 +104,9 @@ public sealed class Trip
     /// <c>true</c> if the trip has a valid time and bus number; otherwise, <c>false</c>.
     /// </returns>
     public bool IsValid()
-    {
-        return !string.IsNullOrWhiteSpace(Time) &&
+        => !string.IsNullOrWhiteSpace(Time) &&
                TimeHelper.IsValidTime(Time) &&
                Bus > 0;
-    }
 
     /// <summary>
     /// Returns a string representation of the trip.
@@ -122,9 +116,7 @@ public sealed class Trip
     /// Example: "14:30 (Bus 42)" or "14:30 (Bus 42, Express)".
     /// </returns>
     public override string ToString()
-    {
-        return string.IsNullOrEmpty(Note)
+        => string.IsNullOrEmpty(Note)
             ? $"{Time} (Bus {Bus})"
             : $"{Time} (Bus {Bus}, {Note})";
-    }
 }

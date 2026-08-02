@@ -1,8 +1,6 @@
 ﻿using MaybeComingBot.Abstractions;
 using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.Collections.ObjectModel;
 
 namespace MaybeComingBot.Services;
 
@@ -22,17 +20,17 @@ namespace MaybeComingBot.Services;
 public class ScheduleStorage : IScheduleStorage, IDisposable
 {
     private ScheduleRoot _data = new() { Stops = [] };
-    private Dictionary<string, Stop> _stopDict = new();
-    private Dictionary<string, IReadOnlyList<Trip>> _tripCache = new();
-    private IReadOnlyList<Stop> _cachedStops = Array.Empty<Stop>();
+    private Dictionary<string, Stop> _stopDict = [];
+    private Dictionary<string, IReadOnlyList<Trip>> _tripCache = [];
+    private IReadOnlyList<Stop> _cachedStops = [];
     private bool _isLoaded;
 
     private readonly ILogger<ScheduleStorage> _logger;
     private readonly ReaderWriterLockSlim _rwLock = new();
 
     // Empty collection constants for consistent returns
-    private static readonly IReadOnlyList<Stop> EmptyStops = Array.Empty<Stop>();
-    private static readonly IReadOnlyList<Trip> EmptyTrips = Array.Empty<Trip>();
+    private static readonly IReadOnlyList<Stop> EmptyStops = [];
+    private static readonly IReadOnlyList<Trip> EmptyTrips = [];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ScheduleStorage"/> class.
@@ -48,6 +46,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
     {
         _rwLock.Dispose();
         _logger.LogDebug("ScheduleStorage disposed");
+        GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc/>
@@ -142,7 +141,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
     /// <returns>A tuple containing all built data structures.</returns>
     private (Dictionary<string, Stop> StopDict, Dictionary<string, IReadOnlyList<Trip>> TripCache, IReadOnlyList<Stop> CachedStops, bool HasData) BuildDataStructures(ScheduleRoot newData)
     {
-        if (newData.Stops is null || newData.Stops.Count == 0)
+        if (newData.Stops is null || newData.Stops.Count is 0)
         {
             return (new Dictionary<string, Stop>(), new Dictionary<string, IReadOnlyList<Trip>>(), EmptyStops, false);
         }
@@ -171,7 +170,7 @@ public class ScheduleStorage : IScheduleStorage, IDisposable
             {
                 foreach (var daySchedule in stop.Schedule)
                 {
-                    if (daySchedule?.Trips is null || daySchedule.Trips.Count == 0)
+                    if (daySchedule?.Trips is null || daySchedule.Trips.Count is 0)
                         continue;
 
                     var key = $"{stop.Id}_{daySchedule.Day}";

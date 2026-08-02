@@ -61,11 +61,11 @@ public class RateLimiter : IDisposable
     /// Rate limit is enforced per user with a sliding window.
     /// Each call increments the request count for the user.
     /// </remarks>
-    public async Task<bool> IsAllowedAsync(long userId)
+    public Task<bool> IsAllowedAsync(long userId)
     {
         // Administrators are always allowed
         if (_adminUserIds.Contains(userId))
-            return true;
+            return Task.FromResult(true);
 
         var now = DateTime.UtcNow;
         var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit());
@@ -86,11 +86,11 @@ public class RateLimiter : IDisposable
                 Interlocked.Increment(ref _totalRateLimitExceeded);
                 _logger.LogWarning("Rate limit exceeded for {UserId} (count: {Count}, window: {Window}m)",
                     userId, limit.Count, _window.TotalMinutes);
-                return false;
+                return Task.FromResult(false);
             }
 
             limit.Count++;
-            return true;
+            return Task.FromResult(true);
         }
     }
 
@@ -227,7 +227,12 @@ public class RateLimiter : IDisposable
     /// <summary>
     /// Represents the rate limit state for a single user.
     /// </summary>
-    private class UserRateLimit
+    /// <remarks>
+    /// Tracks the start of the current sliding window and the number of requests
+    /// made within it. Instances are stored per user in <see cref="_userLimits"/>
+    /// and are access-safe via a lock in <see cref="IsAllowedAsync"/>.
+    /// </remarks>
+    private sealed class UserRateLimit
     {
         /// <summary>Gets or sets the start of the current rate limit window.</summary>
         public DateTime WindowStart { get; set; } = DateTime.UtcNow;

@@ -21,16 +21,26 @@ namespace MaybeComingBot.Services;
 /// <item><description>Status reporting for monitoring</description></item>
 /// </list>
 /// </remarks>
-public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
+/// <param name="loader">The schedule loader for fetching data.</param>
+/// <param name="storage">The storage for persisting schedule data.</param>
+/// <param name="settings">The bot settings containing refresh configuration.</param>
+/// <param name="logger">The logger instance for this class.</param>
+public class ScheduleRefreshService(
+    ScheduleLoader loader,
+    IScheduleStorage storage,
+    IOptions<BotSettings> settings,
+    ILogger<ScheduleRefreshService> logger) : BackgroundService, IScheduleRefreshService
 {
     private const int MaxBackoffFailureCount = 30;
     private const int InitialRetryDelaySeconds = 30;
     private const int LoopErrorDelayMinutes = 5;
 
-    private readonly ScheduleLoader _loader;
-    private readonly IScheduleStorage _storage;
-    private readonly int? _intervalHours;
-    private readonly ILogger<ScheduleRefreshService> _logger;
+    private readonly ScheduleLoader _loader = loader;
+    private readonly IScheduleStorage _storage = storage;
+    private readonly int? _intervalHours = settings.Value.UpdateIntervalHours > 0
+            ? settings.Value.UpdateIntervalHours
+            : (int?)null;
+    private readonly ILogger<ScheduleRefreshService> _logger = logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private readonly Random _jitter = new();
 
@@ -44,32 +54,12 @@ public class ScheduleRefreshService : BackgroundService, IScheduleRefreshService
     /// <inheritdoc/>
     public int FailureCount => Interlocked.CompareExchange(ref _failureCount, 0, 0);
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ScheduleRefreshService"/> class.
-    /// </summary>
-    /// <param name="loader">The schedule loader for fetching data.</param>
-    /// <param name="storage">The storage for persisting schedule data.</param>
-    /// <param name="settings">The bot settings containing refresh configuration.</param>
-    /// <param name="logger">The logger instance for this class.</param>
-    public ScheduleRefreshService(
-        ScheduleLoader loader,
-        IScheduleStorage storage,
-        IOptions<BotSettings> settings,
-        ILogger<ScheduleRefreshService> logger)
-    {
-        _loader = loader;
-        _storage = storage;
-        _intervalHours = settings.Value.UpdateIntervalHours > 0
-            ? settings.Value.UpdateIntervalHours
-            : (int?)null;
-        _logger = logger;
-    }
-
     /// <inheritdoc/>
     public override void Dispose()
     {
         _refreshLock.Dispose();
         base.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>

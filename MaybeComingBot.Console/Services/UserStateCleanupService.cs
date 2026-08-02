@@ -89,7 +89,7 @@ public class UserStateCleanupService : BackgroundService
 
                 var expiredKeys = _userStateService.GetExpiredKeys(_expiry)?.ToList() ?? [];
 
-                if (expiredKeys.Count == 0)
+                if (expiredKeys.Count is 0)
                 {
                     _logger.LogDebug("No expired user states to clean up");
                     continue;
@@ -103,7 +103,7 @@ public class UserStateCleanupService : BackgroundService
                     cleanedCount++;
 
                     // Log every 50 entries
-                    if (cleanedCount % 50 == 0)
+                    if (cleanedCount % 50 is 0)
                     {
                         _logger.LogDebug("Cleaned {Cleaned}/{Total} expired user states",
                             cleanedCount, expiredKeys.Count);

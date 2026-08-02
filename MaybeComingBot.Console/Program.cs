@@ -63,14 +63,23 @@ public class Program
                 .Build();
 
             // ============================================================
-            // 3. VALIDATION AND BOT EXECUTION
+            // 3. VALIDATION, HOST START, AND BOT EXECUTION
             // ============================================================
 
             await ValidateConfigurationAndAdminAsync(host);
-            await RunBotWithRestartAsync(host);
 
-            // Stop host with timeout
-            await host.StopAsync(TimeSpan.FromSeconds(30));
+            // Start hosted services (schedule refresh, user state cleanup)
+            await host.StartAsync();
+
+            try
+            {
+                await RunBotWithRestartAsync(host);
+            }
+            finally
+            {
+                // Stop host with timeout (graceful shutdown of hosted services)
+                await host.StopAsync(TimeSpan.FromSeconds(30));
+            }
         }
         catch (Exception ex)
         {

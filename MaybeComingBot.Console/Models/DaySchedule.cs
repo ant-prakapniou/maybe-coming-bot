@@ -38,7 +38,7 @@ public sealed class DaySchedule
     public int Day
     {
         get => _day;
-        set => _day = value >= 0 && value <= 6 ? value : 0;
+        set => _day = value >= 0 && value <= 6 ? value : default;
     }
 
     /// <summary>
@@ -76,9 +76,7 @@ public sealed class DaySchedule
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="trip"/> is null.</exception>
     public void AddTrip(Trip trip)
     {
-        if (trip is null)
-            throw new ArgumentNullException(nameof(trip));
-
+        ArgumentNullException.ThrowIfNull(trip);
         Trips.Add(trip);
     }
 
@@ -93,13 +91,11 @@ public sealed class DaySchedule
     /// Uses <see cref="Trip.ToMinutesSafe"/> for time comparison.
     /// </remarks>
     public IReadOnlyList<Trip> GetSortedTrips()
-    {
-        return Trips
+        => Trips
             .Where(t => t.IsValid())
             .OrderBy(t => t.ToMinutesSafe())
             .ToList()
             .AsReadOnly();
-    }
 
     /// <summary>
     /// Checks for duplicate trips based on departure time.
@@ -108,9 +104,7 @@ public sealed class DaySchedule
     /// <c>true</c> if there are multiple trips with the same departure time; otherwise, <c>false</c>.
     /// </returns>
     public bool HasDuplicateTrips()
-    {
-        return Trips.GroupBy(t => t.Time).Any(g => g.Count() > 1);
-    }
+        => Trips.GroupBy(t => t.Time).Any(g => g.Count() > 1);
 
     /// <summary>
     /// Returns a string representation of the day schedule.
@@ -119,7 +113,5 @@ public sealed class DaySchedule
     /// A string containing the day name and the number of trips (e.g., "Monday: 12 trips").
     /// </returns>
     public override string ToString()
-    {
-        return $"{DayOfWeek}: {Trips.Count} trips";
-    }
+        => $"{DayOfWeek}: {Trips.Count} trips";
 }

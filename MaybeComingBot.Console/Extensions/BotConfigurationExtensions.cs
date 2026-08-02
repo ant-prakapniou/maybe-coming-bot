@@ -81,9 +81,7 @@ public static class BotConfigurationExtensions
     /// An <see cref="IConfigurationSection"/> representing the BotSettings section.
     /// </returns>
     public static IConfigurationSection GetBotSection(this IConfiguration configuration)
-    {
-        return configuration.GetSection(nameof(BotSettings));
-    }
+        => configuration.GetSection(nameof(BotSettings));
 
     /// <summary>
     /// Retrieves and validates the BotSettings from configuration.
@@ -106,14 +104,9 @@ public static class BotConfigurationExtensions
     public static BotSettings GetBotSettings(this IConfiguration configuration)
     {
         var section = configuration.GetSection(nameof(BotSettings));
-        var settings = section.Get<BotSettings>();
-
-        if (settings is null)
-        {
-            throw new InvalidOperationException(
+        var settings = section.Get<BotSettings>()??throw new InvalidOperationException(
                 $"BotSettings section is missing or empty in configuration. " +
                 $"Please add 'BotSettings' section to appsettings.json.");
-        }
 
         var validationResults = new List<ValidationResult>();
         var context = new ValidationContext(settings);
