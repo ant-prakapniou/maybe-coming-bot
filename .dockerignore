@@ -1,0 +1,33 @@
+# Build artifacts
+**/bin/
+**/obj/
+**/TestResults/
+**/logs/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+
+# VCS
+.git/
+.github/
+.gitignore
+
+# Secrets — never ship a real appsettings.json
+.env
+appsettings.json
+appsettings.Development.json
+
+# Misc
+*.user
+*.suo
+*.userosscache
+*.nupkg
+*.snupkg
+.DS_Store
+
+# Not needed for the image build
+docs/
+MaybeComingBot.Tests/
+

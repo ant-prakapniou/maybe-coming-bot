@@ -1,4 +1,5 @@
 ﻿using MaybeComingBot.Abstractions;
+using MaybeComingBot.Health;
 using MaybeComingBot.Models;
 using MaybeComingBot.Services;
 using MaybeComingBot.Utils;
@@ -106,6 +107,10 @@ public static class ServiceCollectionExtensions
 
         // Registers health check for monitoring bot status.
         services.AddHealthChecks().AddCheck<BotHealthCheck>("bot_health");
+
+        // Hosts a minimal HTTP endpoint (GET /health) so container platforms
+        // such as Railway can health-check the worker. Binds to $PORT.
+        services.AddHostedService<HealthHttpServer>();
 
         return services;
     }

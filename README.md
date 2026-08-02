@@ -215,6 +215,36 @@ Publish a self-contained build:
 dotnet publish MaybeComingBot.Console/MaybeComingBot.csproj -c Release -r win-x64 --self-contained true
 ```
 
+### Deploying to Railway (Docker)
+
+A `Dockerfile` (multi-stage, `sdk:10.0` → `runtime:10.0`) and `railway.json` are included at the repo root. The image:
+
+- Ships a base `appsettings.json` copied from `appsettings.Template.json`.
+- Runs as a **non-root** user (`UID 1654`).
+- Installs `tzdata` (timezone data for local-time formatting) — override the timezone with the `TZ` env var (e.g. `Europe/Berlin`).
+- Exposes a minimal HTTP health endpoint on the `PORT` env var (default `8080`) at `GET /health`, so Railway can run it as a **Web Service**. Healthy or degraded bot states return `200`; unhealthy returns `503`.
+- Uses a `logs/` directory (writable) for the Serilog file sink.
+
+Required environment variables (set them in Railway → Variables, never in `appsettings.json`):
+
+| Railway variable | Value |
+|---|---|
+| `BotSettings__BotToken` | Telegram bot token |
+| `BotSettings__ScheduleUrl` | Absolute URL of the schedule JSON |
+| `BotSettings__AdminUserIds__0` | Admin Telegram user ID (repeat `__1`, `__2`, … for more) |
+| `BotSettings__SupportUsername` | Optional admin username (no `@`) |
+| `PORT` | Set automatically by Railway (do not change) |
+| `TZ` | Optional IANA timezone, e.g. `Europe/Berlin` |
+
+Optional tuning variables use the same `BotSettings__*` prefix (see the [Configuration reference](#configuration-reference)).
+
+Deployment steps:
+
+1. Push the repo to GitHub and create a new Railway project → **Deploy from GitHub repo**.
+2. Railway auto-detects the `Dockerfile` (`railway.json` pins it). If not, choose the **Dockerfile** builder.
+3. Add the variables above in **Variables** (mark token/schedule as sensitive if desired).
+4. Deploy. The logs show the bot initializing, admin validation, and schedule loading.
+
 Recommended production practices:
 
 - Store secrets via environment variables or a secrets manager.
