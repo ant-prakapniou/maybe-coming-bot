@@ -24,11 +24,13 @@ namespace MaybeComingBot.Services;
 /// <param name="loader">The schedule loader for fetching data.</param>
 /// <param name="storage">The storage for persisting schedule data.</param>
 /// <param name="settings">The bot settings containing refresh configuration.</param>
+/// <param name="timeZone">The configured timezone used for status timestamps.</param>
 /// <param name="logger">The logger instance for this class.</param>
 public class ScheduleRefreshService(
     ScheduleLoader loader,
     IScheduleStorage storage,
     IOptions<BotSettings> settings,
+    TimeZoneInfo timeZone,
     ILogger<ScheduleRefreshService> logger) : BackgroundService, IScheduleRefreshService
 {
     private const int MaxBackoffFailureCount = 30;
@@ -37,6 +39,7 @@ public class ScheduleRefreshService(
 
     private readonly ScheduleLoader _loader = loader;
     private readonly IScheduleStorage _storage = storage;
+    private readonly TimeZoneInfo _timeZone = timeZone;
     private readonly int? _intervalHours = settings.Value.UpdateIntervalHours > 0
             ? settings.Value.UpdateIntervalHours
             : (int?)null;
@@ -191,9 +194,9 @@ public class ScheduleRefreshService(
             : 24);
 
         if (age > staleThreshold)
-            return $"⚠️ DATA STALE: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
+            return $"⚠️ DATA STALE: {FormatStatusTime(_lastSuccessfulUpdate)} ({ageStr})";
 
-        return $"✅ LAST: {_lastSuccessfulUpdate.ToLocalTime():HH:mm:ss} ({ageStr})";
+        return $"✅ LAST: {FormatStatusTime(_lastSuccessfulUpdate)} ({ageStr})";
     }
 
     /// <inheritdoc/>
@@ -206,7 +209,18 @@ public class ScheduleRefreshService(
         var ageMinutes = (int)Math.Min(age.TotalMinutes, int.MaxValue);
         var failureCount = FailureCount;
 
-        return $"ATTEMPT: {_lastAttemptTime.ToLocalTime():HH:mm:ss} ({TimeHelper.FormatTimeSpan(ageMinutes)}), FAILS: {failureCount}";
+        return $"ATTEMPT: {FormatStatusTime(_lastAttemptTime)} ({TimeHelper.FormatTimeSpan(ageMinutes)}), FAILS: {failureCount}";
+    }
+
+    /// <summary>
+    /// Converts a UTC timestamp to the configured timezone for display.
+    /// </summary>
+    /// <param name="utcTime">The UTC timestamp to convert.</param>
+    /// <returns>A formatted HH:mm:ss string in the configured timezone.</returns>
+    private string FormatStatusTime(DateTime utcTime)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utcTime, _timeZone);
+        return local.ToString("HH:mm:ss");
     }
 
     /// <summary>

@@ -22,7 +22,7 @@ public class ScheduleFormatterTests
     {
         _storageMock = new Mock<IScheduleStorage>();
         _loggerMock = new Mock<ILogger<ScheduleFormatter>>();
-        _formatter = new ScheduleFormatter(_storageMock.Object, _loggerMock.Object);
+        _formatter = new ScheduleFormatter(_storageMock.Object, TimeZoneInfo.Utc, _loggerMock.Object);
     }
 
     // ============================================================
@@ -34,10 +34,10 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var now = DateTime.Now;
+        var now = DateTime.UtcNow;
         var day = (int)now.DayOfWeek;
 
-        // Создаем рейсы: один в прошлом, два в будущем
+        // Create trips: one in the past, two in the future (relative to UTC)
         var pastTime = now.AddHours(-2).ToString("HH:mm");
         var futureTime1 = now.AddHours(1).ToString("HH:mm");
         var futureTime2 = now.AddHours(2).ToString("HH:mm");
@@ -68,7 +68,7 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var today = (int)DateTime.Now.DayOfWeek;
+        var today = (int)DateTime.UtcNow.DayOfWeek;
         var tomorrow = (today + 1) % 7;
 
         _storageMock
@@ -92,7 +92,7 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var today = (int)DateTime.Now.DayOfWeek;
+        var today = (int)DateTime.UtcNow.DayOfWeek;
 
         for (int i = 0; i < 7; i++)
         {
@@ -109,6 +109,51 @@ public class ScheduleFormatterTests
         result.Should().Contain("No trips in the next 7 days");
     }
 
+    [Fact]
+    public void FormatNearest_WithPositiveUtcOffset_FindsNextTripInLocalZone()
+    {
+        // Arrange: simulate a UTC+3 timezone (Europe/Minsk). The container may run
+        // in UTC, but users are in +3. Schedule times are wall-clock local times.
+        var timeZone = TimeZoneInfo.CreateCustomTimeZone(
+            "Test+3",
+            TimeSpan.FromHours(3),
+            "Test+3",
+            "Test+3");
+
+        var formatter = new ScheduleFormatter(_storageMock.Object, timeZone, _loggerMock.Object);
+        var stop = CreateStop("ST001", "Central Station");
+
+        // Local "now" in the +3 zone.
+        var localNow = TimeHelper.GetLocalNow(timeZone);
+        var day = (int)localNow.DayOfWeek;
+
+        // A trip that is ~2h28m in the past in local time (13:04 local when now is 15:32 local).
+        var pastLocal = localNow.AddHours(-2).AddMinutes(-28);
+        var pastTime = pastLocal.ToString("HH:mm");
+        // A trip that is ~1h in the future in local time.
+        var futureLocal = localNow.AddHours(1);
+        var futureTime = futureLocal.ToString("HH:mm");
+
+        var trips = new List<Trip>
+        {
+            new(pastTime, 42),
+            new(futureTime, 42)
+        };
+
+        _storageMock
+            .Setup(x => x.GetTripsForDay(stop.Id, day))
+            .Returns(trips);
+
+        // Act
+        var result = formatter.FormatNearest(stop);
+
+// Assert: the "next" trip must be the future one, not the past one.
+        result.Should().Contain("🟢 *Next:*");
+        result.Should().Contain(futureTime);
+        // The past trip is either the "following" trip or there are no more trips today.
+        result.Should().ContainAny("🔵 *Following:*", "No more trips today.");
+    }
+
     // ============================================================
     // FormatToday Tests
     // ============================================================
@@ -118,7 +163,7 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var day = (int)DateTime.Now.DayOfWeek;
+        var day = (int)DateTime.UtcNow.DayOfWeek;
         var trips = new List<Trip>
         {
             new("08:00", 10),
@@ -146,7 +191,7 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var day = (int)DateTime.Now.DayOfWeek;
+        var day = (int)DateTime.UtcNow.DayOfWeek;
 
         _storageMock
             .Setup(x => x.GetTripsForDay(stop.Id, day))
@@ -164,8 +209,8 @@ public class ScheduleFormatterTests
     {
         // Arrange
         var stop = CreateStop("ST001", "Central Station");
-        var day = (int)DateTime.Now.DayOfWeek;
-        var now = DateTime.Now;
+        var day = (int)DateTime.UtcNow.DayOfWeek;
+        var now = DateTime.UtcNow;
         var pastTime = now.AddHours(-2).ToString("HH:mm");
         var futureTime = now.AddHours(2).ToString("HH:mm");
 

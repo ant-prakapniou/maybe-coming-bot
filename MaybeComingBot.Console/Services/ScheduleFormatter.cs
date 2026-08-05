@@ -17,9 +17,11 @@ namespace MaybeComingBot.Services;
 /// </remarks>
 public class ScheduleFormatter(
     IScheduleStorage storage,
+    TimeZoneInfo timeZone,
     ILogger<ScheduleFormatter> logger)
 {
     private readonly IScheduleStorage _storage = storage;
+    private readonly TimeZoneInfo _timeZone = timeZone;
     private readonly ILogger<ScheduleFormatter> _logger = logger;
 
     /// <summary>
@@ -38,7 +40,7 @@ public class ScheduleFormatter(
     /// </remarks>
     public string FormatNearest(Stop stop)
     {
-        var now = DateTime.Now;
+        var now = TimeHelper.GetLocalNow(_timeZone);
         var day = (int)now.DayOfWeek;
         var nowMinutes = now.Hour * TimeConstants.MinutesInHour + now.Minute;
 
@@ -91,7 +93,7 @@ public class ScheduleFormatter(
     /// </remarks>
     public string FormatToday(Stop stop)
     {
-        var now = DateTime.Now;
+        var now = TimeHelper.GetLocalNow(_timeZone);
         var day = (int)now.DayOfWeek;
         var trips = _storage.GetTripsForDay(stop.Id, day);
         var sortedTrips = GetSortedTrips(trips);

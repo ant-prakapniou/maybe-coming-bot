@@ -39,7 +39,7 @@ public class BotHandlerTests
             RateLimitWindowMinutes = 1
         });
 
-        var formatter = new ScheduleFormatter(storageMock.Object, Mock.Of<ILogger<ScheduleFormatter>>());
+        var formatter = new ScheduleFormatter(storageMock.Object, TimeZoneInfo.Utc, Mock.Of<ILogger<ScheduleFormatter>>());
         var guard = new StopSelectionGuard(
             storageMock.Object,
             userStateMock.Object,

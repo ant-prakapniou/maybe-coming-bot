@@ -92,6 +92,31 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<CommandDispatcher>();
         services.AddSingleton<BotHandler>();
 
+        // Registers the configured timezone as a singleton so that all services
+        // computing "now" (ScheduleFormatter, ScheduleRefreshService) use the same,
+        // user-facing timezone regardless of the server/container timezone.
+        services.AddSingleton(provider =>
+        {
+            var settings = provider.GetRequiredService<IOptions<BotSettings>>().Value;
+
+            // Honor the container-level TZ environment variable when set (e.g., in Docker).
+            // On Linux, TZ is a valid IANA timezone identifier; this lets operators override
+            // the app setting without redeploying.
+            var rawTz = Environment.GetEnvironmentVariable("TZ");
+            var timeZoneId = !string.IsNullOrWhiteSpace(rawTz) ? rawTz : settings.TimeZoneId;
+
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            }
+            catch (TimeZoneNotFoundException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Invalid timezone id '{timeZoneId}' (from TZ env var or BotSettings.TimeZoneId). " +
+                    "Use a valid IANA id such as 'Europe/Minsk'.", ex);
+            }
+        });
+
         // Registers the schedule refresh service as a singleton so that both the
         // hosted background service and the IScheduleRefreshService consumers
         // (CommandDispatcher, BotHealthCheck) share the SAME instance. This is

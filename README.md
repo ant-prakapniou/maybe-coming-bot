@@ -115,6 +115,7 @@ All settings live under the `BotSettings` section.
 | `ScheduleUrl` | string | — | Absolute URL of the schedule JSON (required). |
 | `AdminUserIds` | long[] | — | At least one admin Telegram user ID (required). **Important:** When using environment variables, multiple IDs must be passed as indexed variables (e.g., `BotSettings__AdminUserIds__0`, `BotSettings__AdminUserIds__1`, …). A single-line array value like `BotSettings__AdminUserIds=[1,2,3]` does **not** work reliably with `AddEnvironmentVariables()` in .NET. |
 | `SupportUsername` | string | — | Optional public Telegram username (without `@`) shown to users as the admin contact link. When omitted, no contact link is rendered (users are guided to `/report`). |
+| `TimeZoneId` | string | `Europe/Minsk` | IANA timezone id used to interpret schedule times and compute the bot's "current time" (e.g. `Europe/Minsk`). On Linux containers, the `TZ` environment variable overrides this setting. |
 | `UpdateIntervalHours` | int | 24 | Hours between automatic schedule refreshes; `0` disables auto-update (0–168). |
 | `UserStateTtlHours` | int | 48 | Inactivity TTL for user sessions (1–48). Should be ≥ `UpdateIntervalHours`. |
 | `RateLimitMaxRequests` | int | 5 | Max requests per user per window (1–20). |

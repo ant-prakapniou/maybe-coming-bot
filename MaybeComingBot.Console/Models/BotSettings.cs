@@ -198,6 +198,27 @@ public class BotSettings
     [Range(5, 120, ErrorMessage = "TimeoutSeconds must be between 5 and 120")]
     public int TimeoutSeconds { get; set; } = 30;
 
+    private string? _timeZoneId;
+
+    /// <summary>
+    /// Gets or sets the IANA timezone identifier used to compute the bot's "current time".
+    /// </summary>
+    /// <value>
+    /// A valid IANA timezone identifier (e.g., "Europe/Minsk"). Defaults to "Europe/Minsk".
+    /// </value>
+    /// <remarks>
+    /// The schedule JSON contains wall-clock times in the users' local timezone. This
+    /// setting ensures the bot compares those times against the correct local "now"
+    /// regardless of the server/container timezone (which is often UTC). On Linux the
+    /// value can also be overridden at the container level with the <c>TZ</c> environment
+    /// variable; when <c>TZ</c> is set, it takes precedence over this setting.
+    /// </remarks>
+    public string TimeZoneId
+    {
+        get => _timeZoneId ?? "Europe/Minsk";
+        set => _timeZoneId = value ?? string.Empty;
+    }
+
     /// <summary>
     /// Gets a value indicating whether automatic update is enabled.
     /// </summary>
@@ -209,5 +230,4 @@ public class BotSettings
     /// Used internally to determine if the background refresh service should run.
     /// </remarks>
     public bool AutoUpdateEnabled => UpdateIntervalHours > 0;
-
 }

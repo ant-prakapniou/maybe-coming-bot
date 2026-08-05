@@ -219,6 +219,25 @@ public static class TimeHelper
     }
 
     /// <summary>
+    /// Returns the current wall-clock time in the specified timezone.
+    /// </summary>
+    /// <param name="timeZone">The timezone in which to compute the current time.</param>
+    /// <returns>
+    /// A <see cref="DateTime"/> whose <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Unspecified"/>
+    /// representing the current local time in <paramref name="timeZone"/>.
+    /// </returns>
+    /// <remarks>
+    /// The schedule JSON contains wall-clock times in the users' local timezone. This helper
+    /// computes "now" in that same timezone so that comparisons (e.g., "is this trip next?")
+    /// are correct regardless of the server/container timezone, which is often UTC.
+    /// </remarks>
+    public static DateTime GetLocalNow(TimeZoneInfo timeZone)
+    {
+        var utcNow = DateTime.UtcNow;
+        return TimeZoneInfo.ConvertTimeFromUtc(utcNow, timeZone);
+    }
+
+    /// <summary>
     /// Clears the internal cache used for time parsing.
     /// </summary>
     /// <remarks>
@@ -230,3 +249,4 @@ public static class TimeHelper
         _cache.Clear();
     }
 }
+

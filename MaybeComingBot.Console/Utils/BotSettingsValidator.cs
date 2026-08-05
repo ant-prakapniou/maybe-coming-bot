@@ -99,6 +99,28 @@ public class BotSettingsValidator : IValidateOptions<BotSettings>
             }
         }
 
+// ============================================================
+        // TIMEZONE VALIDATION
+        // ============================================================
+
+        if (!string.IsNullOrWhiteSpace(options.TimeZoneId))
+        {
+            try
+            {
+                _ = TimeZoneInfo.FindSystemTimeZoneById(options.TimeZoneId);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Invalid TimeZoneId '{options.TimeZoneId}'. Use a valid IANA timezone id such as 'Europe/Minsk'.");
+            }
+            catch (InvalidTimeZoneException)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Invalid TimeZoneId '{options.TimeZoneId}'. Use a valid IANA timezone id such as 'Europe/Minsk'.");
+            }
+        }
+
         // ============================================================
         // CROSS-PROPERTY VALIDATION
         // ============================================================

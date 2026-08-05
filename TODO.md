@@ -1,14 +1,14 @@
-# MaybeComingBot — ASP.NET Core Health Endpoint Migration
+# MaybeComingBot — Timezone Fix
 
 ## Goals
-- [x] Gather context (csproj, Dockerfile, Program.cs, ServiceCollectionExtensions, HealthHttpServer, railway.json, README).
-- [x] Add `<FrameworkReference Include="Microsoft.AspNetCore.App" />` to `MaybeComingBot.Console/MaybeComingBot.csproj`.
-- [x] Switch the Dockerfile runtime stage from `runtime:10.0` to `aspnet:10.0`.
-- [x] Rewrite `MaybeComingBot.Console/Health/HealthHttpServer.cs` as a lightweight `WebApplication` (Kestrel) background service.
-- [x] Update `README.md` Deployment section to mention the ASP.NET Core (Kestrel) health endpoint.
-- [x] Verify: `dotnet build MaybeComingBot.slnx` — 0 errors/warnings (build blocked only by a running bot instance locking MaybeComingBot.exe; main project compiles clean).
-- [x] Verify: `dotnet test MaybeComingBot.Tests` — 205 passed, 0 failed.
-- [x] Move schedule freshness tracking into `ScheduleStorage` (`LastUpdated` set inside `Update`).
-- [x] `BotHealthCheck` now reads `_storage.LastUpdated` as the single source of truth.
-- [x] Added 4 `LastUpdated` tests to `ScheduleStorageTests`.
-
+- [x] Add `TimeZoneId` setting to `BotSettings` (default `Europe/Minsk`).
+- [x] Add `TimeHelper.GetLocalNow(TimeZoneInfo)` helper.
+- [x] Register a singleton `TimeZoneInfo` in DI from `BotSettings.TimeZoneId`.
+- [x] Use the configured timezone in `ScheduleFormatter` (`FormatNearest`, `FormatToday`).
+- [x] Use the configured timezone in `ScheduleRefreshService` admin status timestamps.
+- [x] Validate `TimeZoneId` in `BotSettingsValidator`.
+- [x] Add `TimeZoneId` to `appsettings.Template.json`.
+- [x] Update `ScheduleFormatterTests` to use a deterministic timezone and add a 3-hour-offset test.
+- [x] Document `TimeZoneId` and `TZ` override in `README.md`.
+- [x] Verify: `dotnet build MaybeComingBot.slnx` — 0 errors/warnings.
+- [x] Verify: `dotnet test MaybeComingBot.Tests` — all pass (206/206).

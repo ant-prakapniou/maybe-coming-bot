@@ -17,6 +17,7 @@ public class ScheduleRefreshServiceTests
     private readonly Mock<ILogger<ScheduleRefreshService>> _loggerMock;
     private readonly BotSettings _settings;
     private readonly IOptions<BotSettings> _options;
+    private readonly TimeZoneInfo _timeZone = TimeZoneInfo.Utc;
 
     public ScheduleRefreshServiceTests()
     {
@@ -42,6 +43,9 @@ public class ScheduleRefreshServiceTests
     // ============================================================
     // Helper Methods
     // ============================================================
+
+    private ScheduleRefreshService CreateService()
+        => new(_loaderMock.Object, _storageMock.Object, _options, _timeZone, _loggerMock.Object);
 
     private static ScheduleRoot CreateValidSchedule()
     {
@@ -78,11 +82,7 @@ public class ScheduleRefreshServiceTests
     public async Task ForceRefreshAsync_LoadsAndUpdatesSchedule()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         var schedule = CreateValidSchedule();
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
@@ -102,11 +102,7 @@ public class ScheduleRefreshServiceTests
     public async Task ForceRefreshAsync_WhenRefreshFails_IncrementsFailureCount()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Network error"));
@@ -131,11 +127,7 @@ public class ScheduleRefreshServiceTests
     public async Task ForceRefreshAsync_AfterSuccess_ResetsFailureCount()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         var schedule = CreateValidSchedule();
 
@@ -168,11 +160,7 @@ public class ScheduleRefreshServiceTests
     public async Task ForceRefreshAsync_MultipleFailures_IncrementsCount()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Network error"));
@@ -204,11 +192,7 @@ public class ScheduleRefreshServiceTests
     public void GetStatus_WhenNotLoaded_ReturnsNotLoaded()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         // Act
         var status = service.GetStatus();
@@ -221,11 +205,7 @@ public class ScheduleRefreshServiceTests
     public async Task GetStatus_AfterSuccess_ReturnsSuccessStatus()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         var schedule = CreateValidSchedule();
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
@@ -249,11 +229,7 @@ public class ScheduleRefreshServiceTests
     public void GetLastAttemptInfo_WhenNoAttempts_ReturnsNoAttempts()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         // Act
         var info = service.GetLastAttemptInfo();
@@ -266,11 +242,7 @@ public class ScheduleRefreshServiceTests
     public async Task GetLastAttemptInfo_AfterAttempt_ReturnsAttemptInfo()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         var schedule = CreateValidSchedule();
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
@@ -291,11 +263,7 @@ public class ScheduleRefreshServiceTests
     public async Task GetLastAttemptInfo_AfterFailedAttempt_ShowsFailureCount()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         _loaderMock.Setup(x => x.LoadAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Network error"));
@@ -326,11 +294,7 @@ public class ScheduleRefreshServiceTests
     public void Dispose_ReleasesResources()
     {
         // Arrange
-        var service = new ScheduleRefreshService(
-            _loaderMock.Object,
-            _storageMock.Object,
-            _options,
-            _loggerMock.Object);
+        var service = CreateService();
 
         // Act
         var act = () => service.Dispose();

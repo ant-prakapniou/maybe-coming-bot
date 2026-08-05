@@ -42,7 +42,7 @@ private const long AdminId = 999888777;
             BotToken = "1234567890:ABC"
         });
 
-        var formatter = new ScheduleFormatter(storageMock.Object, Mock.Of<ILogger<ScheduleFormatter>>());
+        var formatter = new ScheduleFormatter(storageMock.Object, TimeZoneInfo.Utc, Mock.Of<ILogger<ScheduleFormatter>>());
         var guard = new StopSelectionGuard(
             storageMock.Object,
             userStateMock.Object,
