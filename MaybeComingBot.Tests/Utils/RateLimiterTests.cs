@@ -3,6 +3,7 @@ using MaybeComingBot.Utils;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Xunit;
 
@@ -15,6 +16,7 @@ public class RateLimiterTests
 {
     private readonly RateLimiter _rateLimiter;
     private readonly BotSettings _settings;
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 11, 5, 12, 0, 0, TimeSpan.Zero));
 
     public RateLimiterTests()
     {
@@ -30,7 +32,7 @@ public class RateLimiterTests
 
         var loggerMock = new Mock<ILogger<RateLimiter>>();
 
-        _rateLimiter = new RateLimiter(optionsMock.Object, loggerMock.Object);
+        _rateLimiter = new RateLimiter(optionsMock.Object, loggerMock.Object, _time);
     }
 
     // ============================================================
@@ -107,11 +109,9 @@ public class RateLimiterTests
         var exceeded = await _rateLimiter.IsAllowedAsync(userId);
         exceeded.Should().BeFalse();
 
-        // Act - ждем сброса окна
-        var waitTime = TimeSpan.FromMinutes(_settings.RateLimitWindowMinutes + 0.1);
-        await Task.Delay(waitTime, TestContext.Current.CancellationToken);
+        // Act - advance the fake clock past the window instead of sleeping.
+        _time.Advance(TimeSpan.FromMinutes(_settings.RateLimitWindowMinutes + 0.1));
 
-        // После ожидания окно должно сброситься
         var resultAfterReset = await _rateLimiter.IsAllowedAsync(userId);
 
         // Assert

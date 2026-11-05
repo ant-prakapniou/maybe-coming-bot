@@ -15,10 +15,16 @@ namespace MaybeComingBot.Utils;
 /// cleaned up by a background timer to prevent memory leaks.
 /// </para>
 /// <para>
+/// Time is obtained via <see cref="TimeProvider"/>. In production the
+/// parameterless constructor uses <see cref="TimeProvider.System"/>; tests
+/// inject a <c>FakeTimeProvider</c> so window-reset behaviour is deterministic
+/// and does not need real <see cref="Task.Delay"/> calls.
+/// </para>
+/// <para>
 /// Cleanup runs on a <see cref="Timer"/> and is tracked as a <see cref="Task"/> so
 /// <see cref="Dispose"/> can cancel it and wait for completion. Without this, a
 /// cleanup that is in flight when the service is disposed could race with the
-/// disposal of <see cref="_cleanupLock"/> and throw <see cref="ObjectDisposedException"/>.
+/// disposal of the cleanup semaphore and throw <see cref="ObjectDisposedException"/>.
 /// </para>
 /// </remarks>
 public class RateLimiter : IDisposable
@@ -28,6 +34,7 @@ public class RateLimiter : IDisposable
     private readonly TimeSpan _window;
     private readonly HashSet<long> _adminUserIds;
     private readonly ILogger<RateLimiter> _logger;
+    private readonly TimeProvider _time;
     private readonly Timer _cleanupTimer;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private readonly CancellationTokenSource _disposeCts = new();
@@ -40,18 +47,35 @@ public class RateLimiter : IDisposable
     private const int DisposeWaitSeconds = 5;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RateLimiter"/> class.
+    /// Initializes a new instance of the <see cref="RateLimiter"/> class
+    /// using the system clock.
     /// </summary>
     /// <param name="settings">The bot settings containing rate limit configuration.</param>
     /// <param name="logger">The logger instance for this class.</param>
     public RateLimiter(
         IOptions<BotSettings> settings,
         ILogger<RateLimiter> logger)
+        : this(settings, logger, TimeProvider.System)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RateLimiter"/> class
+    /// with an explicit time provider. Intended for tests.
+    /// </summary>
+    /// <param name="settings">The bot settings containing rate limit configuration.</param>
+    /// <param name="logger">The logger instance for this class.</param>
+    /// <param name="time">The time provider used to obtain the current UTC time.</param>
+    public RateLimiter(
+        IOptions<BotSettings> settings,
+        ILogger<RateLimiter> logger,
+        TimeProvider time)
     {
         _maxRequests = settings.Value.RateLimitMaxRequests;
         _window = TimeSpan.FromMinutes(settings.Value.RateLimitWindowMinutes);
         _adminUserIds = new HashSet<long>(settings?.Value?.AdminUserIds ?? Array.Empty<long>());
         _logger = logger;
+        _time = time;
 
         _cleanupTimer = new Timer(
             CleanupExpiredEntries,
@@ -78,8 +102,8 @@ public class RateLimiter : IDisposable
         if (_adminUserIds.Contains(userId))
             return Task.FromResult(true);
 
-        var now = DateTime.UtcNow;
-        var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit());
+        var now = _time.GetUtcNow().UtcDateTime;
+        var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit(now));
 
         // Lock only for counter update to ensure atomicity
         lock (limit)
@@ -158,7 +182,7 @@ public class RateLimiter : IDisposable
 
         try
         {
-            var now = DateTime.UtcNow;
+            var now = _time.GetUtcNow().UtcDateTime;
             var expirationThreshold = _window * ExpirationMultiplier;
 
             // Collect keys to remove
@@ -294,8 +318,14 @@ public class RateLimiter : IDisposable
     /// </remarks>
     private sealed class UserRateLimit
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UserRateLimit"/> class.
+        /// </summary>
+        /// <param name="now">The current UTC time at creation.</param>
+        public UserRateLimit(DateTime now) => WindowStart = now;
+
         /// <summary>Gets or sets the start of the current rate limit window.</summary>
-        public DateTime WindowStart { get; set; } = DateTime.UtcNow;
+        public DateTime WindowStart { get; set; }
 
         /// <summary>Gets or sets the request count within the current window.</summary>
         public int Count { get; set; }
