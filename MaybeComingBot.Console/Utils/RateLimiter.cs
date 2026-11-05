@@ -21,6 +21,11 @@ namespace MaybeComingBot.Utils;
 /// and does not need real <see cref="Task.Delay"/> calls.
 /// </para>
 /// <para>
+/// Per-user state is protected by a <see cref="SemaphoreSlim"/> rather than a
+/// <see cref="lock"/>, because <see cref="IsAllowedAsync"/> is asynchronous and
+/// must not block the calling thread under contention.
+/// </para>
+/// <para>
 /// Cleanup runs on a <see cref="Timer"/> and is tracked as a <see cref="Task"/> so
 /// <see cref="Dispose"/> can cancel it and wait for completion. Without this, a
 /// cleanup that is in flight when the service is disposed could race with the
@@ -94,19 +99,19 @@ public class RateLimiter : IDisposable
     /// <remarks>
     /// Administrators bypass rate limiting entirely.
     /// Rate limit is enforced per user with a sliding window.
-    /// Each call increments the request count for the user.
+    /// Each allowed call increments the request count for the user.
     /// </remarks>
-    public Task<bool> IsAllowedAsync(long userId)
+    public async Task<bool> IsAllowedAsync(long userId)
     {
         // Administrators are always allowed
         if (_adminUserIds.Contains(userId))
-            return Task.FromResult(true);
+            return true;
 
         var now = _time.GetUtcNow().UtcDateTime;
         var limit = _userLimits.GetOrAdd(userId, _ => new UserRateLimit(now));
 
-        // Lock only for counter update to ensure atomicity
-        lock (limit)
+        await limit.Gate.WaitAsync().ConfigureAwait(false);
+        try
         {
             // Check if the window has expired
             if (now - limit.WindowStart > _window)
@@ -121,11 +126,15 @@ public class RateLimiter : IDisposable
                 Interlocked.Increment(ref _totalRateLimitExceeded);
                 _logger.LogWarning("Rate limit exceeded for {UserId} (count: {Count}, window: {Window}m)",
                     userId, limit.Count, _window.TotalMinutes);
-                return Task.FromResult(false);
+                return false;
             }
 
             limit.Count++;
-            return Task.FromResult(true);
+            return true;
+        }
+        finally
+        {
+            limit.Gate.Release();
         }
     }
 
@@ -133,12 +142,6 @@ public class RateLimiter : IDisposable
     /// Timer callback that initiates cleanup of expired entries.
     /// </summary>
     /// <param name="state">The timer state (not used).</param>
-    /// <remarks>
-    /// The cleanup runs as a tracked <see cref="Task"/>. If a previous cleanup
-    /// is still running, the next one is skipped inside
-    /// <see cref="CleanupExpiredEntriesAsync"/> via the semaphore. Tracking the
-    /// task lets <see cref="Dispose"/> cancel and await it.
-    /// </remarks>
     private void CleanupExpiredEntries(object? state)
     {
         if (_disposed) return;
@@ -165,11 +168,6 @@ public class RateLimiter : IDisposable
     /// </summary>
     /// <param name="ct">Cancellation token for the cleanup operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    /// <remarks>
-    /// Entries are considered expired when their last activity is older than
-    /// <see cref="ExpirationMultiplier"/> × the rate limit window.
-    /// This prevents the dictionary from growing indefinitely.
-    /// </remarks>
     private async Task CleanupExpiredEntriesAsync(CancellationToken ct)
     {
         if (_disposed) return;
@@ -185,7 +183,6 @@ public class RateLimiter : IDisposable
             var now = _time.GetUtcNow().UtcDateTime;
             var expirationThreshold = _window * ExpirationMultiplier;
 
-            // Collect keys to remove
             var expiredKeys = _userLimits
                 .Where(kvp => now - kvp.Value.WindowStart > expirationThreshold)
                 .Select(kvp => kvp.Key)
@@ -196,8 +193,9 @@ public class RateLimiter : IDisposable
 
             foreach (var key in expiredKeys)
             {
-                if (_userLimits.TryRemove(key, out _))
+                if (_userLimits.TryRemove(key, out var removed))
                 {
+                    removed.Dispose();
                     _logger.LogDebug("Cleaned up expired rate limit entry for {UserId}", key);
                 }
             }
@@ -222,15 +220,11 @@ public class RateLimiter : IDisposable
     /// Resets the rate limit counter for a specific user.
     /// </summary>
     /// <param name="userId">The Telegram user ID to reset.</param>
-    /// <remarks>
-    /// This method completely removes the user's rate limit entry,
-    /// allowing them to start fresh with a clean window.
-    /// Useful for admins to unblock users or during testing.
-    /// </remarks>
     public void ResetUser(long userId)
     {
-        if (_userLimits.TryRemove(userId, out _))
+        if (_userLimits.TryRemove(userId, out var removed))
         {
+            removed.Dispose();
             _logger.LogDebug("Reset rate limit for {UserId}", userId);
         }
     }
@@ -238,36 +232,16 @@ public class RateLimiter : IDisposable
     /// <summary>
     /// Gets the total number of rate limit exceeded events since startup.
     /// </summary>
-    /// <value>
-    /// An integer representing the count of rate limit violations.
-    /// </value>
-    /// <remarks>
-    /// This value is thread-safe and can be used for monitoring and alerting.
-    /// </remarks>
     public int TotalRateLimitExceeded => Volatile.Read(ref _totalRateLimitExceeded);
 
     /// <summary>
     /// Gets the number of users currently tracked by the rate limiter.
     /// </summary>
-    /// <value>
-    /// The active user count in the rate limit dictionary.
-    /// </value>
     public int ActiveUsersCount => _userLimits.Count;
 
     /// <summary>
     /// Disposes the rate limiter and releases all resources.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Order matters:
-    /// <list type="number">
-    /// <item><description>Stop the timer so no new cleanup tasks are scheduled.</description></item>
-    /// <item><description>Cancel <see cref="_disposeCts"/> to interrupt an in-flight cleanup.</description></item>
-    /// <item><description>Wait for <see cref="_cleanupTask"/> to finish (bounded) so it does not race with the disposal of <see cref="_cleanupLock"/>.</description></item>
-    /// <item><description>Dispose the CTS, the semaphore, and clear the dictionary.</description></item>
-    /// </list>
-    /// </para>
-    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
@@ -296,13 +270,15 @@ public class RateLimiter : IDisposable
         }
         catch (AggregateException ex)
         {
-            // The cleanup task faulted; it already logged the error.
             _logger.LogDebug(ex, "Cleanup task ended with an exception during dispose");
         }
 
         // 4. Release resources.
         _disposeCts.Dispose();
         _cleanupLock.Dispose();
+
+        foreach (var limit in _userLimits.Values)
+            limit.Dispose();
         _userLimits.Clear();
 
         GC.SuppressFinalize(this);
@@ -311,23 +287,15 @@ public class RateLimiter : IDisposable
     /// <summary>
     /// Represents the rate limit state for a single user.
     /// </summary>
-    /// <remarks>
-    /// Tracks the start of the current sliding window and the number of requests
-    /// made within it. Instances are stored per user in <see cref="_userLimits"/>
-    /// and are access-safe via a lock in <see cref="IsAllowedAsync"/>.
-    /// </remarks>
-    private sealed class UserRateLimit
+    private sealed class UserRateLimit(DateTime now) : IDisposable
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="UserRateLimit"/> class.
-        /// </summary>
-        /// <param name="now">The current UTC time at creation.</param>
-        public UserRateLimit(DateTime now) => WindowStart = now;
 
-        /// <summary>Gets or sets the start of the current rate limit window.</summary>
-        public DateTime WindowStart { get; set; }
+        /// <summary>Serializes access to the per-user window state.</summary>
+        public readonly SemaphoreSlim Gate = new(1, 1);
 
-        /// <summary>Gets or sets the request count within the current window.</summary>
+        public DateTime WindowStart { get; set; } = now;
         public int Count { get; set; }
+
+        public void Dispose() => Gate.Dispose();
     }
 }

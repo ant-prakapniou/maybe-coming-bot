@@ -13,23 +13,32 @@ namespace MaybeComingBot.Services;
 /// Provides Telegram message sending capabilities with retry logic and error handling.
 /// </summary>
 /// <remarks>
+/// <para>
 /// This class wraps the Telegram Bot API client with:
 /// <list type="bullet">
 /// <item><description>Automatic retry with exponential backoff for transient errors</description></item>
+/// <item><description>Honouring Telegram's <c>retry_after</c> hint for 429 responses</description></item>
 /// <item><description>Text truncation to Telegram's 4096 character limit</description></item>
 /// <item><description>Markdown parse error fallback to plain text</description></item>
 /// <item><description>Graceful handling of common API errors (403, 400)</description></item>
 /// <item><description>Support for editing messages and sending chat actions</description></item>
 /// </list>
+/// </para>
+/// <para>
+/// Retries use a Polly v8 <see cref="ResiliencePipeline"/>. The delay generator
+/// inspects the <see cref="Outcome{TResult}"/> and, for 429, uses the server-provided
+/// <c>retry_after</c> value (capped at 30 seconds) instead of a fixed exponential backoff.
+/// </para>
 /// </remarks>
-public class TelegramSender:ITelegramSender
+public class TelegramSender : ITelegramSender
 {
     private readonly ITelegramBotClient _botClient;
     private readonly ILogger<TelegramSender> _logger;
-    private readonly AsyncRetryPolicy _retryPolicy;
+    private readonly ResiliencePipeline _retryPipeline;
     private const int MaxMessageLength = 4096;
     private const int DefaultMaxRetryCount = 5;
     private const int MaxEditableMessageLength = 4096;
+    private const int MaxRetryDelaySeconds = 30;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TelegramSender"/> class.
@@ -45,21 +54,49 @@ public class TelegramSender:ITelegramSender
         _botClient = botClient;
         _logger = logger;
 
-        _retryPolicy = Policy
-            .Handle<ApiRequestException>(ex =>
-                ex.ErrorCode == 429 || // Too Many Requests
-                ex.ErrorCode == 500 || // Internal Server Error
-                ex.ErrorCode == 502 || // Bad Gateway
-                ex.ErrorCode == 503 || // Service Unavailable
-                ex.ErrorCode == 504)   // Gateway Timeout
-            .WaitAndRetryAsync(
-                maxRetryCount,
-                retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
-                onRetry: (ex, delay, retryCount, _) =>
+        var retryOptions = new RetryStrategyOptions
+        {
+            MaxRetryAttempts = maxRetryCount,
+            ShouldHandle = new PredicateBuilder()
+                .Handle<ApiRequestException>(ex =>
+                    ex.ErrorCode == 429 || // Too Many Requests
+                    ex.ErrorCode == 500 || // Internal Server Error
+                    ex.ErrorCode == 502 || // Bad Gateway
+                    ex.ErrorCode == 503 || // Service Unavailable
+                    ex.ErrorCode == 504),  // Gateway Timeout
+            // DelayGenerator receives the Outcome, so we can read the original
+            // ApiRequestException (and its retry_after) without shared state.
+            DelayGenerator = args =>
+            {
+                // 429 with retry_after: wait exactly as long as Telegram asks,
+                // but never longer than 30 seconds.
+                if (args.Outcome.Exception is ApiRequestException api
+                    && api.ErrorCode == 429
+                    && api.Parameters?.RetryAfter is { } retryAfterSeconds
+                    && retryAfterSeconds > 0)
                 {
-                    _logger.LogWarning(ex, "Telegram retry {Retry}/{Max}: {Delay:F1}s",
-                        retryCount, maxRetryCount, delay.TotalSeconds);
-                });
+                    return ValueTask.FromResult<TimeSpan?>(
+                        TimeSpan.FromSeconds(Math.Min(retryAfterSeconds, MaxRetryDelaySeconds)));
+                }
+
+                // 5xx and anything else transient: exponential backoff capped at 30s.
+                // AttemptNumber is 0-based in Polly v8, so use AttemptNumber + 1
+                // to match the historical 2, 4, 8, 16, 30 progression.
+                var backoff = Math.Min(Math.Pow(2, args.AttemptNumber + 1), MaxRetryDelaySeconds);
+                return ValueTask.FromResult<TimeSpan?>(TimeSpan.FromSeconds(backoff));
+            },
+            OnRetry = args =>
+            {
+                _logger.LogWarning(args.Outcome.Exception,
+                    "Telegram retry {Retry}/{Max} in {Delay:F1}s",
+                    args.AttemptNumber, maxRetryCount, args.RetryDelay.TotalSeconds);
+                return ValueTask.CompletedTask;
+            }
+        };
+
+        _retryPipeline = new ResiliencePipelineBuilder()
+            .AddRetry(retryOptions)
+            .Build();
     }
 
     /// <summary>
@@ -161,8 +198,8 @@ public class TelegramSender:ITelegramSender
     {
         try
         {
-            await _retryPolicy.ExecuteAsync(
-                async (cancellationToken) =>
+            await _retryPipeline.ExecuteAsync(
+                async cancellationToken =>
                 {
                     await _botClient.SendMessage(
                         chatId,
@@ -173,7 +210,7 @@ public class TelegramSender:ITelegramSender
 
                     _logger.LogTrace("Message sent to {ChatId} with {ParseMode}", chatId, parseMode);
                 },
-                cancellationToken: ct);
+                ct);
         }
         catch (ApiRequestException ex) when (ex.ErrorCode == 400 &&
                                              parseMode != ParseMode.None &&
