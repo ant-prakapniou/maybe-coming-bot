@@ -9,9 +9,17 @@ namespace MaybeComingBot.Utils;
 /// Provides rate limiting functionality to prevent abuse and spam.
 /// </summary>
 /// <remarks>
+/// <para>
 /// This class tracks user requests and enforces limits based on a sliding window.
 /// Administrators are exempt from rate limiting. Expired entries are automatically
 /// cleaned up by a background timer to prevent memory leaks.
+/// </para>
+/// <para>
+/// Cleanup runs on a <see cref="Timer"/> and is tracked as a <see cref="Task"/> so
+/// <see cref="Dispose"/> can cancel it and wait for completion. Without this, a
+/// cleanup that is in flight when the service is disposed could race with the
+/// disposal of <see cref="_cleanupLock"/> and throw <see cref="ObjectDisposedException"/>.
+/// </para>
 /// </remarks>
 public class RateLimiter : IDisposable
 {
@@ -22,11 +30,14 @@ public class RateLimiter : IDisposable
     private readonly ILogger<RateLimiter> _logger;
     private readonly Timer _cleanupTimer;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
+    private readonly CancellationTokenSource _disposeCts = new();
+    private Task? _cleanupTask;
     private bool _disposed;
     private int _totalRateLimitExceeded;
 
     private const int CleanupIntervalMinutes = 10;
     private const int ExpirationMultiplier = 2;
+    private const int DisposeWaitSeconds = 5;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RateLimiter"/> class.
@@ -98,37 +109,48 @@ public class RateLimiter : IDisposable
     /// Timer callback that initiates cleanup of expired entries.
     /// </summary>
     /// <param name="state">The timer state (not used).</param>
+    /// <remarks>
+    /// The cleanup runs as a tracked <see cref="Task"/>. If a previous cleanup
+    /// is still running, the next one is skipped inside
+    /// <see cref="CleanupExpiredEntriesAsync"/> via the semaphore. Tracking the
+    /// task lets <see cref="Dispose"/> cancel and await it.
+    /// </remarks>
     private void CleanupExpiredEntries(object? state)
     {
         if (_disposed) return;
 
-        Task.Run(async () =>
+        _cleanupTask = Task.Run(async () =>
         {
             try
             {
-                await CleanupExpiredEntriesAsync();
+                await CleanupExpiredEntriesAsync(_disposeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Cleanup failed");
             }
-        });
+        }, _disposeCts.Token);
     }
 
     /// <summary>
     /// Removes expired rate limit entries from the dictionary.
     /// </summary>
+    /// <param name="ct">Cancellation token for the cleanup operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <remarks>
     /// Entries are considered expired when their last activity is older than
     /// <see cref="ExpirationMultiplier"/> × the rate limit window.
     /// This prevents the dictionary from growing indefinitely.
     /// </remarks>
-    private async Task CleanupExpiredEntriesAsync()
+    private async Task CleanupExpiredEntriesAsync(CancellationToken ct)
     {
         if (_disposed) return;
 
-        if (!await _cleanupLock.WaitAsync(TimeSpan.Zero))
+        if (!await _cleanupLock.WaitAsync(TimeSpan.Zero, ct).ConfigureAwait(false))
         {
             _logger.LogDebug("Cleanup already in progress, skipping");
             return;
@@ -157,6 +179,10 @@ public class RateLimiter : IDisposable
             }
 
             _logger.LogDebug("Cleaned up {Count} expired rate limit entries", expiredKeys.Count);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -207,6 +233,17 @@ public class RateLimiter : IDisposable
     /// <summary>
     /// Disposes the rate limiter and releases all resources.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Order matters:
+    /// <list type="number">
+    /// <item><description>Stop the timer so no new cleanup tasks are scheduled.</description></item>
+    /// <item><description>Cancel <see cref="_disposeCts"/> to interrupt an in-flight cleanup.</description></item>
+    /// <item><description>Wait for <see cref="_cleanupTask"/> to finish (bounded) so it does not race with the disposal of <see cref="_cleanupLock"/>.</description></item>
+    /// <item><description>Dispose the CTS, the semaphore, and clear the dictionary.</description></item>
+    /// </list>
+    /// </para>
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
@@ -214,11 +251,34 @@ public class RateLimiter : IDisposable
 
         _disposed = true;
 
-        // Stop and dispose the timer
-        _cleanupTimer?.Change(Timeout.Infinite, Timeout.Infinite);
-        _cleanupTimer?.Dispose();
+        // 1. Stop the timer so no new cleanup tasks are scheduled.
+        _cleanupTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _cleanupTimer.Dispose();
 
-        _cleanupLock?.Dispose();
+        // 2. Cancel any in-flight cleanup.
+        try
+        {
+            _disposeCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed; nothing to cancel.
+        }
+
+        // 3. Wait (bounded) for the cleanup task to observe cancellation and exit.
+        try
+        {
+            _cleanupTask?.Wait(TimeSpan.FromSeconds(DisposeWaitSeconds));
+        }
+        catch (AggregateException ex)
+        {
+            // The cleanup task faulted; it already logged the error.
+            _logger.LogDebug(ex, "Cleanup task ended with an exception during dispose");
+        }
+
+        // 4. Release resources.
+        _disposeCts.Dispose();
+        _cleanupLock.Dispose();
         _userLimits.Clear();
 
         GC.SuppressFinalize(this);

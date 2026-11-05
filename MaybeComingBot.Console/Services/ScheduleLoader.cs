@@ -1,5 +1,6 @@
 ﻿using MaybeComingBot.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -17,11 +18,13 @@ namespace MaybeComingBot.Services;
 /// <param name="logger">The logger instance for this class.</param>
 public class ScheduleLoader(
     IHttpClientFactory httpClientFactory,
+    IOptions<BotSettings> settings,
     ILogger<ScheduleLoader> logger)
 {
     private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
     private readonly ILogger<ScheduleLoader> _logger = logger;
-    private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _timeout = TimeSpan.FromSeconds(
+        settings.Value.TimeoutSeconds > 0 ? settings.Value.TimeoutSeconds : 30);
     private const string HttpClientName = nameof(ScheduleLoader);
 
     /// <summary>

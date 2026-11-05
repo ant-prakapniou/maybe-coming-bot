@@ -1,14 +1,13 @@
-﻿using MaybeComingBot.Models;
+﻿using FluentAssertions;
+using MaybeComingBot.Models;
 using MaybeComingBot.Services;
-using MaybeComingBot.Utils;
-using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Xunit;
 
 namespace MaybeComingBot.Tests.Services;
 
@@ -22,7 +21,10 @@ public class ScheduleLoaderTests
     {
         _httpClientFactoryMock = new Mock<IHttpClientFactory>();
         _loggerMock = new Mock<ILogger<ScheduleLoader>>();
-        _loader = new ScheduleLoader(_httpClientFactoryMock.Object, _loggerMock.Object);
+        _loader = new ScheduleLoader(
+            _httpClientFactoryMock.Object,
+            Options.Create(new BotSettings { TimeoutSeconds = 30 }),
+            _loggerMock.Object);
     }
 
     // ============================================================
