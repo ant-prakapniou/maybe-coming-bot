@@ -34,8 +34,8 @@ Built with **.NET 10**, **Telegram.Bot 22.x**, **Polly** (resilience), **Serilog
 - **Automatic schedule refresh** — background service with exponential backoff + jitter and thread-safe locking.
 - **Rate limiting** — per-user sliding window (admins exempt).
 - **User-state TTL cleanup** — stale user sessions are removed periodically.
-- **Resilience** — Polly-based retry/timeout policies for HTTP and Telegram API calls, with Markdown-parse fallback and text truncation.
-- **Health checks** — `BotHealthCheck` reports Healthy / Degraded / Unhealthy status for monitoring.
+- **Resilience** — Polly v8 `ResiliencePipeline` for Telegram sends, with `retry_after` honoured for 429 and backoff capped at 30s; Polly retry/timeout policies for the schedule HTTP client, with Markdown-parse fallback and text truncation.
+- **Health checks** — `BotHealthCheck` reports Healthy / Degraded / Unhealthy. The HTTP endpoint returns **200 for Healthy and Degraded**, and **503 only for Unhealthy** (missing core services). "Schedule not loaded yet" is Degraded, not Unhealthy, so the container is not stopped while the initial schedule load is in progress.
 
 ---
 
@@ -69,6 +69,10 @@ Program.cs                     — entry point: config, Serilog, host, admin val
 - **`ITelegramSender` abstraction** — all outbound Telegram calls (send message, answer callback, edit message, chat actions) go through this interface. It centralizes retries, text truncation, and Markdown fallback, and keeps `BotHandler` / `CommandDispatcher` unit-testable with mocks (the raw `ITelegramBotClient` extension methods cannot be mocked in Telegram.Bot 22.x).
 - **Single `ScheduleRefreshService` instance** — it is registered as both a `BackgroundService` (via `AddHostedService`) and as the `IScheduleRefreshService` singleton, so `/status` and the health check observe the same running instance.
 - **`ScheduleStorage`** is thread-safe (`ReaderWriterLockSlim`) and clones data on write to prevent mutation from outside.
+- **`TelegramSender` uses Polly v8 `ResiliencePipeline`.** Retries for 429/5xx go through `RetryStrategyOptions.DelayGenerator`, which inspects the `Outcome` and uses Telegram's `retry_after` for 429 (capped at 30s) instead of a fixed exponential backoff. This avoids holding one message for 60+ seconds when Telegram asks for a short wait.
+- **`RateLimiter` is async-safe.** Per-user state is protected by a `SemaphoreSlim` rather than a `lock`, because `IsAllowedAsync` is asynchronous and must not block the calling thread under per-user contention. Cleanup is tracked as a `Task` and cancelled in `Dispose`.
+- **Startup order: host first, then validation.** `Program.cs` calls `host.StartAsync()` before validating admin users, so the health endpoint (a hosted service) is listening from the first second, even if Telegram or the schedule URL is temporarily unreachable. Admin validation failures are logged as warnings; they do not prevent the bot from starting.
+- **`ScheduleRefreshService` does not crash the host on startup failure.** If the initial schedule load fails, it logs Critical and keeps retrying in the background. `/health` reports `Degraded` (200) during this time, avoiding `BackgroundServiceExceptionBehavior.StopHost`, which would stop the entire container.
 
 ---
 
@@ -185,7 +189,7 @@ Notes:
 ## Testing
 
 ```bash
-dotnet test MaybeComingBot.slnx
+dotnet test
 ```
 
 The test project covers:
@@ -223,7 +227,7 @@ A `Dockerfile` (multi-stage, `sdk:10.0` → `aspnet:10.0`) and `railway.json` ar
 - Starts with an empty `appsettings.json` (`{}`); all configuration is provided via environment variables (`BotSettings__*` prefix). The `appsettings.Template.json` file is kept in the repository for local development and documentation purposes only.
 - Runs as the built-in **non-root** `app` user (`UID 1654`) from the `aspnet` base image.
 - Installs `tzdata` (timezone data for local-time formatting) — override the timezone with the `TZ` env var (e.g. `Europe/Berlin`).
-- Exposes an HTTP health endpoint on the `PORT` env var (default `8080`) at `GET /health`, served by a lightweight **ASP.NET Core (Kestrel)** minimal API running as a background service, so Railway can run it as a **Web Service**. Healthy or degraded bot states return `200`; unhealthy returns `503`. The Telegram polling loop runs independently and is unaffected by the health endpoint.
+- Exposes an HTTP health endpoint on the `PORT` env var (default `8080`) at `GET /health`, served by a lightweight **ASP.NET Core (Kestrel)** minimal API running as a background service, so Railway can run it as a **Web Service**. Healthy or degraded bot states return `200`; unhealthy returns `503`. The Telegram polling loop runs independently and is unaffected by the health endpoint. "Schedule not loaded yet" is reported as `Degraded` (200), so Railway does not stop the container while the initial schedule load is in progress; `Unhealthy` (503) is reserved for missing core services (DI misconfiguration).
 - Uses a `logs/` directory (writable) for the Serilog file sink.
 
 Required environment variables (set them in Railway → Variables, never in `appsettings.json`):
@@ -257,6 +261,14 @@ Recommended production practices:
 
 ---
 
+## Development notes
+
+- **Startup order matters.** `host.StartAsync()` runs before admin validation, so `/health` answers from the first second. Do not move the validation back before `StartAsync()` — that was the cause of the bot appearing to "fall asleep" on Railway.
+- **`ScheduleRefreshService` never throws on initial load failure.** It logs Critical and retries in the background; `/health` reports `Degraded`. This is intentional: a `throw` in `BackgroundService.ExecuteAsync` stops the host (`StopHost`), which takes down the whole container.
+- **`BotHealthCheck` semantics.** `Degraded` for "not ready yet" (no data, no stops, never updated, stale, high failure count); `Unhealthy` only for missing core services. The HTTP endpoint maps `Degraded` to 200.
+- **`TelegramSender` retry.** Polly v8 `ResiliencePipeline` with `DelayGenerator`: 429 uses Telegram's `retry_after` (capped at 30s); 5xx uses exponential backoff capped at 30s. This replaces the old `Math.Pow(2, retryAttempt)` that could hold one message for 62s.
+- **`RateLimiter` and time.** `TimeProvider` is injected for deterministic tests (`FakeTimeProvider`). The cleanup timer is not currently driven by `TimeProvider` — tests do not rely on it.
+
 ## Logging
 
 Serilog is configured in `appsettings.json` under the `Serilog` section:
@@ -275,6 +287,3 @@ MaybeComingBot.slnx                 — solution (console + tests)
 MaybeComingBot.Console/             — main application
 MaybeComingBot.Tests/               — unit tests
 ```
-
-See `docs/CODE_REVIEW.md` for a detailed code review with findings and recommendations.
-
