@@ -23,6 +23,7 @@ public class ScheduleRefreshServiceTests
     {
         _loaderMock = new Mock<ScheduleLoader>(
             Mock.Of<IHttpClientFactory>(),
+            Options.Create(new BotSettings { TimeoutSeconds = 30 }),
             Mock.Of<ILogger<ScheduleLoader>>())
         {
             CallBase = true
