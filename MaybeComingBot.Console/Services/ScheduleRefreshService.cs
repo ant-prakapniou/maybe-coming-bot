@@ -118,8 +118,33 @@ public class ScheduleRefreshService(
 
         if (!_storage.HasData())
         {
-            _logger.LogCritical("NO SCHEDULE DATA");
-            throw new InvalidOperationException("Schedule data could not be loaded");
+            // Do NOT throw here. An exception in BackgroundService.ExecuteAsync
+            // stops the host (BackgroundServiceExceptionBehavior.StopHost),
+            // which is exactly the "bot fell asleep" behaviour we are fixing.
+            // Instead, log Critical, keep the host alive, and let the main loop
+            // below retry with exponential backoff. /health reports Degraded
+            // (HTTP 200) during this time.
+            _logger.LogCritical(
+                "NO SCHEDULE DATA after initial load and retry. " +
+                "The bot will keep running and retry in the background; " +
+                "/health reports Degraded until data is loaded.");
+
+            if (!_intervalHours.HasValue)
+            {
+                // Auto-update disabled: nothing else to do. Keep the host alive
+                // so /health and the HTTP endpoint stay responsive.
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Normal shutdown
+                }
+                return;
+            }
+
+            // Fall through to the main loop, which retries with backoff.
         }
 
         // If auto-update is disabled, wait indefinitely

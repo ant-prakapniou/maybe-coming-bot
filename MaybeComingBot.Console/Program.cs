@@ -23,8 +23,9 @@ namespace MaybeComingBot;
 /// <list type="number">
 /// <item><description>Configures logging and configuration</description></item>
 /// <item><description>Builds the dependency injection container</description></item>
-/// <item><description>Validates admin users</description></item>
-/// <item><description>Starts the bot with automatic restart capability</description></item>
+/// <item><description>Starts hosted services (health endpoint, schedule refresh, cleanup)</description></item>
+/// <item><description>Validates admin users (non-fatal: logs a warning if Telegram is unreachable)</description></item>
+/// <item><description>Runs the bot with automatic restart capability</description></item>
 /// <item><description>Handles graceful shutdown on Ctrl+C</description></item>
 /// </list>
 /// </remarks>
@@ -63,16 +64,23 @@ public class Program
                 .Build();
 
             // ============================================================
-            // 3. VALIDATION, HOST START, AND BOT EXECUTION
+            // 3. START HOST FIRST, THEN VALIDATE
             // ============================================================
 
-            await ValidateConfigurationAndAdminAsync(host);
-
-            // Start hosted services (schedule refresh, user state cleanup)
+            // Start hosted services (health endpoint, schedule refresh, cleanup)
+            // BEFORE any network calls. This makes GET /health answer from the
+            // first second, even if Telegram or the schedule URL is unreachable.
+            // Railway's healthcheck must never observe "connection refused"
+            // during startup, otherwise it may stop the container.
             await host.StartAsync();
 
             try
             {
+                // Admin validation is useful but must not prevent the bot from
+                // starting: if Telegram is down, the bot still serves /health and
+                // the schedule refresh loop keeps retrying in the background.
+                await ValidateConfigurationAndAdminAsync(host);
+
                 await RunBotWithRestartAsync(host);
             }
             finally
@@ -98,9 +106,12 @@ public class Program
     /// <param name="host">The host containing required services.</param>
     /// <param name="cancellationToken">Cancellation token for the operation.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when an admin user ID is invalid or not found.
-    /// </exception>
+    /// <remarks>
+    /// Validation failures are logged but do not throw: a bot that cannot reach
+    /// Telegram at startup should still come up and serve /health, and retry
+    /// admin validation on the next restart. The schedule refresh loop and the
+    /// polling loop handle transient Telegram errors on their own.
+    /// </remarks>
     private static async Task ValidateConfigurationAndAdminAsync(IHost host, CancellationToken cancellationToken = default)
     {
         var settings = host.Services.GetRequiredService<IOptions<BotSettings>>().Value;
@@ -121,17 +132,20 @@ public class Program
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400)
             {
-                logger.LogError("❌ Admin ID {AdminUserId} invalid", adminId);
-                throw new InvalidOperationException($"Admin {adminId} not found.");
+                // 400 means the ID itself is wrong — this is a configuration
+                // error worth surfacing, but not worth killing the process over.
+                logger.LogError("❌ Admin ID {AdminUserId} invalid (400 from Telegram)", adminId);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "❌ Admin validation failed for {AdminUserId}", adminId);
-                throw;
+                logger.LogWarning(ex,
+                    "⚠️ Admin validation failed for {AdminUserId}. " +
+                    "Bot will start anyway; retry on next restart.",
+                    adminId);
             }
         }
 
-        logger.LogInformation("✅ All admins validated");
+        logger.LogInformation("✅ Admin validation finished");
     }
 
     /// <summary>
